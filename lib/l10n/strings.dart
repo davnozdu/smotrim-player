@@ -613,4 +613,13 @@ class S {
     'Введите 8-значный ID и 6-значный пин-код',
     'Введіть 8-значний ID та 6-значний пін-код',
   );
+  String get loginTitle => _t('Log in', 'Вход', 'Вхід');
+  String get loginSub => _t(
+    'Enter your ID and PIN to restore your playlist',
+    'Введите ваш ID и пин-код, чтобы восстановить плейлист',
+    'Введіть ваш ID та пін-код, щоб відновити плейлист',
+  );
+  String get loginButton => _t('Log in', 'Войти', 'Увійти');
+  String get skipLogin =>
+      _t('Skip login', 'Пропустить вход', 'Пропустити вхід');
 }

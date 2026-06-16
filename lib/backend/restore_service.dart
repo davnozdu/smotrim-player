@@ -1,3 +1,4 @@
+import 'package:open_tv/backend/identity_service.dart';
 import 'package:open_tv/backend/sql.dart';
 import 'package:open_tv/backend/utils.dart';
 import 'package:open_tv/models/source.dart';
@@ -32,5 +33,7 @@ class RestoreService {
       ),
     );
     await Sql.activateOnlySource(sourceName);
+    // Adopt the entered credentials as this device's identity.
+    await IdentityService.save(id, pin);
   }
 }

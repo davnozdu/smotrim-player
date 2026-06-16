@@ -16,7 +16,7 @@ import 'package:open_tv/models/filters.dart';
 import 'package:open_tv/models/home_manager.dart';
 import 'package:open_tv/models/settings.dart';
 import 'package:open_tv/backend/utils.dart';
-import 'package:open_tv/setup.dart';
+import 'package:open_tv/restore_login.dart';
 import 'package:open_tv/tv_home.dart';
 
 Future<void> main() async {
@@ -174,7 +174,7 @@ class MyApp extends StatelessWidget {
                       filters: Filters(viewType: settings.defaultView),
                     ),
                   ))
-          : const Setup(),
+          : const RestoreLoginPage(),
     );
   }
 }

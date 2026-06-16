@@ -43,6 +43,13 @@ class IdentityService {
 
   static Future<String?> getPin() async => Sql.getSetting(_subscriberPinKey);
 
+  // Adopt an entered ID + PIN as this device's identity (after a successful
+  // login/restore), so the home screen shows the subscriber's own ID.
+  static Future<void> save(String id, String pin) async {
+    await Sql.setSetting(_subscriberIdKey, id);
+    await Sql.setSetting(_subscriberPinKey, pin);
+  }
+
   static Future<String> getOrCreatePin() async {
     var pin = await Sql.getSetting(_subscriberPinKey);
     if (!_validDigits(pin, subscriberPinLength)) {
