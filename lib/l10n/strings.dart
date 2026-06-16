@@ -555,4 +555,13 @@ class S {
     'Данные гостя сброшены',
     'Дані гостя скинуто',
   );
+  String get clearFavorites =>
+      _t('Clear favorites', 'Очистить избранное', 'Очистити вибране');
+  String get clearFavoritesConfirm => _t(
+    'Remove all channels from favorites?',
+    'Убрать все каналы из избранного?',
+    'Прибрати всі канали з вибраного?',
+  );
+  String get favoritesCleared =>
+      _t('Favorites cleared', 'Избранное очищено', 'Вибране очищено');
 }

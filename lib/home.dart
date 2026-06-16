@@ -8,6 +8,7 @@ import 'package:open_tv/backend/sql.dart';
 import 'package:open_tv/backend/utils.dart';
 import 'package:open_tv/bottom_nav.dart';
 import 'package:open_tv/channel_tile.dart';
+import 'package:open_tv/focus_icon_button.dart';
 import 'package:open_tv/loading.dart';
 import 'package:open_tv/models/channel.dart';
 import 'package:open_tv/models/filters.dart';
@@ -24,12 +25,15 @@ class Home extends StatefulWidget {
   final bool refresh;
   final bool firstLaunch;
   final bool hasTouchScreen;
+  // In hotel mode the Favorites view shows a broom to clear all favorites.
+  final bool hotelMode;
   const Home({
     super.key,
     required this.home,
     this.refresh = false,
     this.firstLaunch = false,
     this.hasTouchScreen = true,
+    this.hotelMode = false,
   });
   @override
   State<Home> createState() => _HomeState();
@@ -142,6 +146,40 @@ class _HomeState extends State<Home> {
     }, context);
   }
 
+  // Broom in the Favorites view (hotel mode): wipes all favorites after a
+  // confirmation, then reloads the now-empty list.
+  Future<void> _clearFavorites() async {
+    final s = S.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.clearFavorites),
+        content: Text(s.clearFavoritesConfirm),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(s.cancel),
+          ),
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(s.confirm),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await Error.tryAsyncNoLoading(
+      () async => await Sql.clearFavorites(),
+      context,
+    );
+    await load(false);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(s.favoritesCleared)),
+    );
+  }
+
   @override
   void dispose() {
     _scrollController.dispose();
@@ -251,6 +289,23 @@ class _HomeState extends State<Home> {
                   icon: const Icon(Icons.arrow_back),
                   onPressed: () => Navigator.of(context).pop(),
                 ),
+              )
+            : (widget.hotelMode &&
+                  widget.home.filters.viewType == ViewType.favorites)
+            ? AppBar(
+                automaticallyImplyLeading: false,
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                actions: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: FocusIconButton(
+                      icon: Icons.cleaning_services,
+                      tooltip: S.of(context).clearFavorites,
+                      onPressed: _clearFavorites,
+                    ),
+                  ),
+                ],
               )
             : null,
         body: Loading(

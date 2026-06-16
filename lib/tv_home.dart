@@ -4,6 +4,7 @@ import 'package:open_tv/backend/launch_bridge.dart';
 import 'package:open_tv/backend/settings_service.dart';
 import 'package:open_tv/backend/sql.dart';
 import 'package:open_tv/boot_wait_screen.dart';
+import 'package:open_tv/focus_icon_button.dart';
 import 'package:open_tv/home.dart';
 import 'package:open_tv/menu_tile.dart';
 import 'package:open_tv/models/autostart_action.dart';
@@ -103,8 +104,11 @@ class _TvHomeState extends State<TvHome> {
   void _navigateHome(BuildContext context, Filters filters) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) =>
-            Home(home: HomeManager(filters: filters), hasTouchScreen: false),
+        builder: (context) => Home(
+          home: HomeManager(filters: filters),
+          hasTouchScreen: false,
+          hotelMode: widget.hotelMode,
+        ),
       ),
     );
   }
@@ -271,7 +275,8 @@ class _TvHomeState extends State<TvHome> {
                   alignment: Alignment.centerRight,
                   child: Padding(
                     padding: const EdgeInsets.only(top: 8, right: 16),
-                    child: _HotelGearButton(
+                    child: FocusIconButton(
+                      icon: Icons.settings,
                       tooltip: s.hotelExit,
                       onPressed: _openHotelGear,
                     ),
@@ -320,20 +325,21 @@ class _TvHomeState extends State<TvHome> {
                   ),
                   onLongPress: unlock,
                 ),
-                MenuTile(
-                  icon: Icons.history,
-                  label: s.history,
-                  color: LinearGradient(
-                    colors: [Colors.teal.shade700, Colors.green.shade400],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+                if (!widget.hotelMode)
+                  MenuTile(
+                    icon: Icons.history,
+                    label: s.history,
+                    color: LinearGradient(
+                      colors: [Colors.teal.shade700, Colors.green.shade400],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    onTap: () => _navigateHome(
+                      context,
+                      Filters(viewType: ViewType.history),
+                    ),
+                    onLongPress: unlock,
                   ),
-                  onTap: () => _navigateHome(
-                    context,
-                    Filters(viewType: ViewType.history),
-                  ),
-                  onLongPress: unlock,
-                ),
                 if (!widget.hotelMode)
                   MenuTile(
                     icon: Icons.settings,
@@ -361,57 +367,3 @@ class _TvHomeState extends State<TvHome> {
   }
 }
 
-/// Gear button for the hotel shell with a clear blue focus ring (the default
-/// IconButton highlight is too faint to see on the black background / TV).
-class _HotelGearButton extends StatefulWidget {
-  final VoidCallback onPressed;
-  final String tooltip;
-  const _HotelGearButton({required this.onPressed, required this.tooltip});
-
-  @override
-  State<_HotelGearButton> createState() => _HotelGearButtonState();
-}
-
-class _HotelGearButtonState extends State<_HotelGearButton> {
-  final FocusNode _node = FocusNode();
-
-  @override
-  void initState() {
-    super.initState();
-    _node.addListener(_onFocus);
-  }
-
-  void _onFocus() => setState(() {});
-
-  @override
-  void dispose() {
-    _node.removeListener(_onFocus);
-    _node.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final focused = _node.hasFocus;
-    return Tooltip(
-      message: widget.tooltip,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: focused ? const Color(0x334FC3F7) : Colors.transparent,
-          border: Border.all(
-            color: focused ? const Color(0xFF4FC3F7) : Colors.transparent,
-            width: 3,
-          ),
-        ),
-        child: IconButton(
-          focusNode: _node,
-          iconSize: 30,
-          icon: const Icon(Icons.settings),
-          onPressed: widget.onPressed,
-        ),
-      ),
-    );
-  }
-}

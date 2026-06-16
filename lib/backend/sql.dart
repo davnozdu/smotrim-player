@@ -536,6 +536,12 @@ class Sql {
     ''');
   }
 
+  // Removes every channel from favorites (the broom in the Favorites screen).
+  static Future<void> clearFavorites() async {
+    var db = await DbFactory.db;
+    await db.execute('UPDATE channels SET favorite = 0');
+  }
+
   // Hotel mode "reset guest data": clears favorites, watch history and saved
   // movie positions across all channels, but keeps the channels and EPG intact.
   static Future<void> resetGuestData() async {
