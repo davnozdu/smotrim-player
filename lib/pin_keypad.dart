@@ -11,18 +11,25 @@ Future<String?> showPinKeypad(
   BuildContext context, {
   required String title,
   String? subtitle,
+  int length = hotelPinLength,
 }) {
   return showDialog<String>(
     context: context,
     barrierDismissible: true,
-    builder: (_) => _PinKeypadDialog(title: title, subtitle: subtitle),
+    builder: (_) =>
+        _PinKeypadDialog(title: title, subtitle: subtitle, length: length),
   );
 }
 
 class _PinKeypadDialog extends StatefulWidget {
   final String title;
   final String? subtitle;
-  const _PinKeypadDialog({required this.title, this.subtitle});
+  final int length;
+  const _PinKeypadDialog({
+    required this.title,
+    this.subtitle,
+    this.length = hotelPinLength,
+  });
 
   @override
   State<_PinKeypadDialog> createState() => _PinKeypadDialogState();
@@ -32,9 +39,9 @@ class _PinKeypadDialogState extends State<_PinKeypadDialog> {
   String _value = '';
 
   void _input(String d) {
-    if (_value.length >= hotelPinLength) return;
+    if (_value.length >= widget.length) return;
     setState(() => _value += d);
-    if (_value.length == hotelPinLength) {
+    if (_value.length == widget.length) {
       final v = _value;
       // Let the last dot render before closing.
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -51,7 +58,7 @@ class _PinKeypadDialogState extends State<_PinKeypadDialog> {
   Widget _dots() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(hotelPinLength, (i) {
+      children: List.generate(widget.length, (i) {
         final filled = i < _value.length;
         return Container(
           margin: const EdgeInsets.symmetric(horizontal: 3),

@@ -35,6 +35,8 @@ class Settings {
   // channels, guide, favorites and history. Protected by an 8-digit PIN.
   bool hotelMode;
   String? hotelPin;
+  // Hide the subscriber ID shown in the corner of the home screen.
+  bool hideId;
   Settings({
     this.defaultView = ViewType.all,
     this.refreshOnStart = false,
@@ -59,6 +61,7 @@ class Settings {
     this.autostartCategoryName,
     this.hotelMode = false,
     this.hotelPin,
+    this.hideId = false,
   })  : hiddenCategories = hiddenCategories ?? <String>{},
         categoryPins = categoryPins ?? <String, String>{};
 

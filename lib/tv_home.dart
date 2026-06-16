@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:open_tv/backend/identity_service.dart';
 import 'package:open_tv/backend/launch_bridge.dart';
 import 'package:open_tv/backend/settings_service.dart';
 import 'package:open_tv/backend/sql.dart';
@@ -32,11 +33,44 @@ class TvHome extends StatefulWidget {
 class _TvHomeState extends State<TvHome> {
   bool _autoOpened = false;
   DateTime? _lastBackAt;
+  String? _subscriberId;
+  bool _hideId = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _autoOpen());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoOpen();
+      _initIdentity();
+    });
+  }
+
+  // Ensures the device has a subscriber ID + PIN, shows the ID on screen, and on
+  // first generation pops up the "save your ID and PIN" notice.
+  Future<void> _initIdentity() async {
+    final res = await IdentityService.ensure();
+    final settings = await SettingsService.getSettings();
+    if (!mounted) return;
+    setState(() {
+      _subscriberId = res.id;
+      _hideId = settings.hideId;
+    });
+    if (res.isNew) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(S.of(ctx).credentialsTitle),
+          content: Text(S.of(ctx).credentialsBody(res.id, res.pin)),
+          actions: [
+            TextButton(
+              autofocus: true,
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text(S.of(ctx).ok),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   // Decides what to play on launch: resume an interrupted stream, or run the
@@ -270,16 +304,34 @@ class _TvHomeState extends State<TvHome> {
         body: SafeArea(
           child: Column(
             children: [
-              if (widget.hotelMode)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 8, right: 16),
-                    child: FocusIconButton(
-                      icon: Icons.settings,
-                      tooltip: s.hotelExit,
-                      onPressed: _openHotelGear,
-                    ),
+              if ((!_hideId && _subscriberId != null) || widget.hotelMode)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 16, 0),
+                  child: Row(
+                    children: [
+                      const Spacer(),
+                      // Subscriber ID — small, in the top-right corner; not for
+                      // daily use but always findable. Hidden via the setting.
+                      if (!_hideId && _subscriberId != null)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: Text(
+                            '${s.yourId}: $_subscriberId',
+                            style: const TextStyle(
+                              color: Color(0xFF80CBC4), // calm teal on black
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      if (widget.hotelMode)
+                        FocusIconButton(
+                          icon: Icons.settings,
+                          tooltip: s.hotelExit,
+                          onPressed: _openHotelGear,
+                        ),
+                    ],
                   ),
                 ),
               Expanded(

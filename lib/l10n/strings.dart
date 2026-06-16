@@ -564,4 +564,53 @@ class S {
   );
   String get favoritesCleared =>
       _t('Favorites cleared', 'Избранное очищено', 'Вибране очищено');
+
+  // Subscriber identity (ID + PIN) and playlist restore
+  String get yourId => _t('Your ID', 'Ваш ID', 'Ваш ID');
+  String get hideId => _t('Hide ID', 'Скрыть ID', 'Сховати ID');
+  String get hideIdSub => _t(
+    'Hide the subscriber ID in the corner of the home screen',
+    'Скрыть ID абонента в углу главного экрана',
+    'Сховати ID абонента в кутку головного екрана',
+  );
+  String get showPinCode =>
+      _t('Show PIN code', 'Показать пин-код', 'Показати пін-код');
+  String get subscriberPinTitle =>
+      _t('Your PIN code', 'Ваш пин-код', 'Ваш пін-код');
+  String get credentialsTitle =>
+      _t('Your ID and PIN', 'Ваш ID и пин-код', 'Ваш ID та пін-код');
+  String credentialsBody(String id, String pin) => _t(
+    'Your ID: $id\nYour PIN: $pin\n\nSave this in a safe place. '
+        'It identifies you as a subscriber.',
+    'Ваш ID: $id\nВаш пин-код: $pin\n\nСохраните эти данные в надёжном месте. '
+        'Они служат для вашей идентификации как абонента.',
+    'Ваш ID: $id\nВаш пін-код: $pin\n\nЗбережіть ці дані в надійному місці. '
+        'Вони служать для вашої ідентифікації як абонента.',
+  );
+  String get restorePlaylist =>
+      _t('Restore playlist', 'Восстановить плейлист', 'Відновити плейлист');
+  String get restorePlaylistSub => _t(
+    'Download your playlist by ID and PIN',
+    'Скачать ваш плейлист по ID и пин-коду',
+    'Завантажити ваш плейлист за ID та пін-кодом',
+  );
+  String get restoreIdLabel => _t('ID (8 digits)', 'ID (8 цифр)', 'ID (8 цифр)');
+  String get restorePinLabel =>
+      _t('PIN (6 digits)', 'Пин-код (6 цифр)', 'Пін-код (6 цифр)');
+  String get send => _t('Send', 'Отправить', 'Надіслати');
+  String get restoreInProgress => _t(
+    'Restoring playlist…',
+    'Восстановление плейлиста…',
+    'Відновлення плейлиста…',
+  );
+  String get restoreSuccess => _t(
+    'Playlist restored',
+    'Плейлист восстановлен',
+    'Плейлист відновлено',
+  );
+  String get restoreInvalidInput => _t(
+    'Enter an 8-digit ID and a 6-digit PIN',
+    'Введите 8-значный ID и 6-значный пин-код',
+    'Введіть 8-значний ID та 6-значний пін-код',
+  );
 }

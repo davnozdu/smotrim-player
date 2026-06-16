@@ -29,6 +29,7 @@ const autostartChannelNameProp = "autostartChannelName";
 const autostartCategoryNameProp = "autostartCategoryName";
 const hotelModeProp = "hotelMode";
 const hotelPinProp = "hotelPin";
+const hideIdProp = "hideId";
 
 class SettingsService {
   static Future<Settings> getSettings() async {
@@ -125,6 +126,10 @@ class SettingsService {
     }
     final hpin = settingsMap[hotelPinProp];
     if (hpin != null && hpin.isNotEmpty) settings.hotelPin = hpin;
+    var hideId = settingsMap[hideIdProp];
+    if (hideId != null) {
+      settings.hideId = int.parse(hideId) == 1;
+    }
     return settings;
   }
 
@@ -170,6 +175,7 @@ class SettingsService {
         settings.autostartCategoryName ?? '';
     settingsMap[hotelModeProp] = (settings.hotelMode ? 1 : 0).toString();
     settingsMap[hotelPinProp] = settings.hotelPin ?? '';
+    settingsMap[hideIdProp] = (settings.hideId ? 1 : 0).toString();
     await Sql.updateSettings(settingsMap);
   }
 }

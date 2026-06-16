@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:open_tv/backend/identity_service.dart';
 import 'package:open_tv/backend/settings_service.dart';
 import 'package:open_tv/backend/sql.dart';
 import 'package:open_tv/backend/utils.dart';
@@ -25,6 +26,7 @@ import 'package:open_tv/error.dart';
 import 'package:open_tv/l10n/strings.dart';
 import 'package:open_tv/main.dart';
 import 'package:open_tv/pin_keypad.dart';
+import 'package:open_tv/restore_playlist.dart';
 import 'package:open_tv/setup.dart';
 import 'package:open_tv/tv_home.dart';
 
@@ -459,6 +461,31 @@ class _SettingsState extends State<SettingsView> {
     updateSettings();
   }
 
+  // Shows the subscriber's ID and PIN (PIN is otherwise hidden).
+  Future<void> _showSubscriberPin() async {
+    final id = await IdentityService.getOrCreateId();
+    final pin = await IdentityService.getOrCreatePin();
+    if (!mounted) return;
+    final s = S.of(context);
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.subscriberPinTitle),
+        content: Text(
+          '${s.yourId}: $id\n${s.subscriberPinTitle}: $pin',
+          style: const TextStyle(fontSize: 18),
+        ),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(s.ok),
+          ),
+        ],
+      ),
+    );
+  }
+
   // Turns on hotel mode: asks for an 8-digit PIN twice, stores it, then
   // restarts into the lean hotel shell (Settings becomes inaccessible).
   Future<void> _enableHotelMode() async {
@@ -720,6 +747,23 @@ class _SettingsState extends State<SettingsView> {
                     onTap: () async => await _showEpgUrlDialog(),
                   ),
                   ListTile(
+                    leading: const Icon(Icons.password),
+                    title: Text(s.showPinCode),
+                    onTap: _showSubscriberPin,
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.badge_outlined),
+                    title: Text(s.hideId),
+                    subtitle: Text(s.hideIdSub),
+                    trailing: Switch(
+                      value: settings.hideId,
+                      onChanged: (bool value) {
+                        setState(() => settings.hideId = value);
+                        updateSettings();
+                      },
+                    ),
+                  ),
+                  ListTile(
                     leading: const Icon(Icons.hotel),
                     title: Text(s.hotelMode),
                     subtitle: Text(s.hotelModeSub),
@@ -756,6 +800,17 @@ class _SettingsState extends State<SettingsView> {
                       context,
                       MaterialPageRoute(
                         builder: (context) => const Setup(showAppBar: true),
+                      ),
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.cloud_download),
+                    title: Text(s.restorePlaylist),
+                    subtitle: Text(s.restorePlaylistSub),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const RestorePlaylistPage(),
                       ),
                     ),
                   ),
