@@ -84,9 +84,15 @@ class RestoreService {
       client.close();
     }
 
-    // 2) Make sure it's actually an M3U before importing.
-    if (!body.trimLeft().startsWith('#EXTM3U')) {
+    // 2) Make sure it's actually an M3U before importing. Tolerate any leading
+    //    junk a misbehaving server might prepend (BOM, stray PHP warnings, blank
+    //    lines) by trimming everything before the first #EXTM3U.
+    final idx = body.indexOf('#EXTM3U');
+    if (idx < 0) {
       throw RestoreException(RestoreError.badPlaylist);
+    }
+    if (idx > 0) {
+      body = body.substring(idx);
     }
 
     // 3) Import from the already-downloaded content (no second download). The
