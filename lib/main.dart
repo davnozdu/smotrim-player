@@ -162,10 +162,11 @@ class MyApp extends StatelessWidget {
       themeMode: ThemeMode.dark,
       debugShowCheckedModeBanner: false,
       home: skipSetup
-          ? (settings.forceTVMode ||
+          ? (settings.hotelMode ||
+                    settings.forceTVMode ||
                     isTV ||
                     (!hasTouchScreen && (Platform.isAndroid || Platform.isIOS))
-                ? TvHome()
+                ? TvHome(hotelMode: settings.hotelMode)
                 : Home(
                     firstLaunch: true,
                     refresh: settings.refreshOnStart,

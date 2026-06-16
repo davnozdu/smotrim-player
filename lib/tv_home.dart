@@ -12,13 +12,17 @@ import 'package:open_tv/models/filters.dart';
 import 'package:open_tv/models/home_manager.dart';
 import 'package:open_tv/models/settings.dart';
 import 'package:open_tv/models/view_type.dart';
+import 'package:open_tv/pin_keypad.dart';
 import 'package:open_tv/settings_view.dart';
 import 'package:open_tv/tv_categories.dart';
 import 'package:open_tv/tv_guide.dart';
 import 'package:open_tv/l10n/strings.dart';
 
 class TvHome extends StatefulWidget {
-  const TvHome({super.key});
+  // In hotel mode the Settings tile is hidden and management is only reachable
+  // by long-pressing a tile and entering the PIN.
+  final bool hotelMode;
+  const TvHome({super.key, this.hotelMode = false});
 
   @override
   State<TvHome> createState() => _TvHomeState();
@@ -123,9 +127,71 @@ class _TvHomeState extends State<TvHome> {
     );
   }
 
+  // Hotel mode: long-pressing a tile asks for the PIN, then offers to disable
+  // hotel mode or reset the current guest's data.
+  Future<void> _openHotelUnlock() async {
+    final s = S.of(context);
+    final settings = await SettingsService.getSettings();
+    final stored = settings.hotelPin ?? '';
+    if (!mounted) return;
+    final entered = await showPinKeypad(context, title: s.hotelEnterPin);
+    if (entered == null || !mounted) return;
+    if (stored.isEmpty || entered != stored) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.pinWrong)),
+      );
+      return;
+    }
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.hotelManageTitle),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              autofocus: true,
+              leading: const Icon(Icons.cleaning_services_outlined),
+              title: Text(s.hotelResetGuest),
+              onTap: () => Navigator.of(ctx).pop('reset'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.logout),
+              title: Text(s.hotelDisable),
+              onTap: () => Navigator.of(ctx).pop('disable'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(s.cancel),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'disable') {
+      await SettingsService.setHotelMode(false, null);
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const TvHome(hotelMode: false)),
+        (route) => false,
+      );
+    } else if (action == 'reset') {
+      await Sql.resetGuestData();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.hotelGuestReset)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = S.of(context);
+    // In hotel mode every tile reveals the PIN unlock on a long press (hold OK).
+    final VoidCallback? unlock = widget.hotelMode ? _openHotelUnlock : null;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
@@ -166,6 +232,7 @@ class _TvHomeState extends State<TvHome> {
                     end: Alignment.bottomRight,
                   ),
                   onTap: () => _navChannels(context),
+                  onLongPress: unlock,
                 ),
                 MenuTile(
                   icon: Icons.grid_view,
@@ -176,6 +243,7 @@ class _TvHomeState extends State<TvHome> {
                     end: Alignment.bottomRight,
                   ),
                   onTap: () => _navGuide(context),
+                  onLongPress: unlock,
                 ),
                 MenuTile(
                   icon: Icons.star,
@@ -189,6 +257,7 @@ class _TvHomeState extends State<TvHome> {
                     context,
                     Filters(viewType: ViewType.favorites),
                   ),
+                  onLongPress: unlock,
                 ),
                 MenuTile(
                   icon: Icons.history,
@@ -202,20 +271,22 @@ class _TvHomeState extends State<TvHome> {
                     context,
                     Filters(viewType: ViewType.history),
                   ),
+                  onLongPress: unlock,
                 ),
-                MenuTile(
-                  icon: Icons.settings,
-                  label: s.settings,
-                  color: LinearGradient(
-                    colors: [
-                      Colors.blueGrey.shade800,
-                      Colors.blueGrey.shade600,
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+                if (!widget.hotelMode)
+                  MenuTile(
+                    icon: Icons.settings,
+                    label: s.settings,
+                    color: LinearGradient(
+                      colors: [
+                        Colors.blueGrey.shade800,
+                        Colors.blueGrey.shade600,
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    onTap: () => _navSettings(context),
                   ),
-                  onTap: () => _navSettings(context),
-                ),
               ],
             ),
           ),

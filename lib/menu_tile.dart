@@ -6,6 +6,7 @@ class MenuTile extends StatefulWidget {
   final String label;
   final LinearGradient color;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final bool autofocus;
   // Optional category icon image (assets/categories/*.png). When set, it is
   // shown instead of [icon].
@@ -17,6 +18,7 @@ class MenuTile extends StatefulWidget {
     required this.label,
     required this.color,
     required this.onTap,
+    this.onLongPress,
     this.autofocus = false,
     this.imageAsset,
   });
@@ -109,6 +111,7 @@ class _MenuTileState extends State<MenuTile> {
           child: InkWell(
             autofocus: widget.autofocus,
             onTap: widget.onTap,
+            onLongPress: widget.onLongPress,
             onFocusChange: (value) => setState(() => _isFocused = value),
             onHover: (value) => setState(() => _isHovered = value),
             borderRadius: BorderRadius.circular(20),

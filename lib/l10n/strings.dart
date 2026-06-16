@@ -506,4 +506,48 @@ class S {
   String get selectChannel =>
       _t('Select channel', 'Выберите канал', 'Виберіть канал');
   String get notChosen => _t('Not chosen', 'Не выбрано', 'Не вибрано');
+
+  // Hotel / kiosk mode
+  String get hotelMode => _t('Hotel mode', 'Режим отеля', 'Режим готелю');
+  String get hotelModeSub => _t(
+    'View only: channels, guide, favorites and history. Hides settings.',
+    'Только просмотр: каналы, программа, избранное и история. Настройки скрыты.',
+    'Лише перегляд: канали, програма, вибране та історія. Налаштування приховані.',
+  );
+  String get hotelEnterNewPin => _t(
+    'Create an 8-digit PIN',
+    'Придумайте пин-код (8 цифр)',
+    'Придумайте пін-код (8 цифр)',
+  );
+  String get hotelRepeatPin => _t(
+    'Repeat the PIN',
+    'Повторите пин-код',
+    'Повторіть пін-код',
+  );
+  String get hotelEnterPin =>
+      _t('Enter the PIN', 'Введите пин-код', 'Введіть пін-код');
+  String get hotelPin8Hint => _t(
+    'The PIN protects exiting hotel mode',
+    'Пин-код защищает выход из режима отеля',
+    'Пін-код захищає вихід з режиму готелю',
+  );
+  String get hotelEnabled =>
+      _t('Hotel mode enabled', 'Режим отеля включён', 'Режим готелю увімкнено');
+  String get hotelManageTitle =>
+      _t('Hotel mode', 'Режим отеля', 'Режим готелю');
+  String get hotelDisable => _t(
+    'Disable hotel mode',
+    'Отключить режим отеля',
+    'Вимкнути режим готелю',
+  );
+  String get hotelResetGuest => _t(
+    'Reset guest data',
+    'Сбросить данные гостя',
+    'Скинути дані гостя',
+  );
+  String get hotelGuestReset => _t(
+    'Guest data has been reset',
+    'Данные гостя сброшены',
+    'Дані гостя скинуто',
+  );
 }

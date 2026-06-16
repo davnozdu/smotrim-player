@@ -536,6 +536,18 @@ class Sql {
     ''');
   }
 
+  // Hotel mode "reset guest data": clears favorites, watch history and saved
+  // movie positions across all channels, but keeps the channels and EPG intact.
+  static Future<void> resetGuestData() async {
+    var db = await DbFactory.db;
+    await db.writeTransaction((tx) async {
+      await tx.execute(
+          'UPDATE channels SET favorite = 0, last_watched = NULL');
+      await tx.execute('DELETE FROM movie_positions');
+    });
+    await setSetting('activeChannelId', null);
+  }
+
   static Future<List<ChannelPreserve>> getChannelsPreserve(int sourceId) async {
     var db = await DbFactory.db;
     var results = await db.getAll('''

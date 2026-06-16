@@ -27,6 +27,8 @@ const autostartCategoryIdProp = "autostartCategoryId";
 const autostartChannelIdProp = "autostartChannelId";
 const autostartChannelNameProp = "autostartChannelName";
 const autostartCategoryNameProp = "autostartCategoryName";
+const hotelModeProp = "hotelMode";
+const hotelPinProp = "hotelPin";
 
 class SettingsService {
   static Future<Settings> getSettings() async {
@@ -117,7 +119,20 @@ class SettingsService {
     if (cn != null && cn.isNotEmpty) settings.autostartChannelName = cn;
     final gn = settingsMap[autostartCategoryNameProp];
     if (gn != null && gn.isNotEmpty) settings.autostartCategoryName = gn;
+    var hotel = settingsMap[hotelModeProp];
+    if (hotel != null) {
+      settings.hotelMode = int.parse(hotel) == 1;
+    }
+    final hpin = settingsMap[hotelPinProp];
+    if (hpin != null && hpin.isNotEmpty) settings.hotelPin = hpin;
     return settings;
+  }
+
+  // Toggles hotel mode and stores its PIN without rewriting every other
+  // setting (used from the lean hotel shell where no full Settings is loaded).
+  static Future<void> setHotelMode(bool enabled, String? pin) async {
+    await Sql.setSetting(hotelModeProp, enabled ? '1' : '0');
+    await Sql.setSetting(hotelPinProp, pin ?? '');
   }
 
   static Future<void> updateSettings(Settings settings) async {
@@ -153,6 +168,8 @@ class SettingsService {
     settingsMap[autostartChannelNameProp] = settings.autostartChannelName ?? '';
     settingsMap[autostartCategoryNameProp] =
         settings.autostartCategoryName ?? '';
+    settingsMap[hotelModeProp] = (settings.hotelMode ? 1 : 0).toString();
+    settingsMap[hotelPinProp] = settings.hotelPin ?? '';
     await Sql.updateSettings(settingsMap);
   }
 }

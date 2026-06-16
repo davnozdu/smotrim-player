@@ -31,6 +31,10 @@ class Settings {
   int? autostartChannelId;
   String? autostartChannelName; // shown in settings
   String? autostartCategoryName; // shown in settings
+  // Hotel/kiosk mode: hides Settings and any management actions, leaving only
+  // channels, guide, favorites and history. Protected by an 8-digit PIN.
+  bool hotelMode;
+  String? hotelPin;
   Settings({
     this.defaultView = ViewType.all,
     this.refreshOnStart = false,
@@ -53,6 +57,8 @@ class Settings {
     this.autostartChannelId,
     this.autostartChannelName,
     this.autostartCategoryName,
+    this.hotelMode = false,
+    this.hotelPin,
   })  : hiddenCategories = hiddenCategories ?? <String>{},
         categoryPins = categoryPins ?? <String, String>{};
 

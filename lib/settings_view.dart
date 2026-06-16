@@ -24,7 +24,9 @@ import 'package:open_tv/backend/updater.dart';
 import 'package:open_tv/error.dart';
 import 'package:open_tv/l10n/strings.dart';
 import 'package:open_tv/main.dart';
+import 'package:open_tv/pin_keypad.dart';
 import 'package:open_tv/setup.dart';
+import 'package:open_tv/tv_home.dart';
 
 class SettingsView extends StatefulWidget {
   final bool showNavBar;
@@ -457,6 +459,35 @@ class _SettingsState extends State<SettingsView> {
     updateSettings();
   }
 
+  // Turns on hotel mode: asks for an 8-digit PIN twice, stores it, then
+  // restarts into the lean hotel shell (Settings becomes inaccessible).
+  Future<void> _enableHotelMode() async {
+    final s = S.of(context);
+    final p1 = await showPinKeypad(
+      context,
+      title: s.hotelEnterNewPin,
+      subtitle: s.hotelPin8Hint,
+    );
+    if (p1 == null || p1.length != hotelPinLength || !mounted) return;
+    final p2 = await showPinKeypad(context, title: s.hotelRepeatPin);
+    if (p2 == null || !mounted) return;
+    if (p1 != p2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.pinMismatch)),
+      );
+      return;
+    }
+    await SettingsService.setHotelMode(true, p1);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(s.hotelEnabled)),
+    );
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const TvHome(hotelMode: true)),
+      (route) => false,
+    );
+  }
+
   Future<void> _showEpgUrlDialog() async {
     final s = S.of(context);
     final controller = TextEditingController(text: settings.epgUrl);
@@ -687,6 +718,12 @@ class _SettingsState extends State<SettingsView> {
                       settings.epgUrl.isEmpty ? s.notSet : settings.epgUrl,
                     ),
                     onTap: () async => await _showEpgUrlDialog(),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.hotel),
+                    title: Text(s.hotelMode),
+                    subtitle: Text(s.hotelModeSub),
+                    onTap: _enableHotelMode,
                   ),
                   const Divider(),
                   Padding(
