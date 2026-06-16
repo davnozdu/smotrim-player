@@ -540,6 +540,11 @@ class S {
     'Отключить режим отеля',
     'Вимкнути режим готелю',
   );
+  String get hotelExit => _t(
+    'Exit hotel mode',
+    'Выйти из режима отеля',
+    'Вийти з режиму готелю',
+  );
   String get hotelResetGuest => _t(
     'Reset guest data',
     'Сбросить данные гостя',

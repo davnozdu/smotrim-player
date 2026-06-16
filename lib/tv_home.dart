@@ -127,6 +127,53 @@ class _TvHomeState extends State<TvHome> {
     );
   }
 
+  // Visible gear shown only in hotel mode: a single "Exit hotel mode" item,
+  // still PIN-protected so a guest can't leave the kiosk shell.
+  Future<void> _openHotelGear() async {
+    final s = S.of(context);
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.hotelManageTitle),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              autofocus: true,
+              leading: const Icon(Icons.logout),
+              title: Text(s.hotelExit),
+              onTap: () => Navigator.of(ctx).pop('exit'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(s.cancel),
+          ),
+        ],
+      ),
+    );
+    if (action != 'exit' || !mounted) return;
+    final settings = await SettingsService.getSettings();
+    final stored = settings.hotelPin ?? '';
+    if (!mounted) return;
+    final entered = await showPinKeypad(context, title: s.hotelEnterPin);
+    if (entered == null || !mounted) return;
+    if (stored.isEmpty || entered != stored) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.pinWrong)),
+      );
+      return;
+    }
+    await SettingsService.setHotelMode(false, null);
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const TvHome(hotelMode: false)),
+      (route) => false,
+    );
+  }
+
   // Hotel mode: long-pressing a tile asks for the PIN, then offers to disable
   // hotel mode or reset the current guest's data.
   Future<void> _openHotelUnlock() async {
@@ -217,11 +264,27 @@ class _TvHomeState extends State<TvHome> {
       },
       child: Scaffold(
         body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            child: Wrap(
-              alignment: WrapAlignment.center,
-              children: [
+          child: Column(
+            children: [
+              if (widget.hotelMode)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 8, right: 16),
+                    child: IconButton(
+                      tooltip: s.hotelExit,
+                      iconSize: 30,
+                      icon: const Icon(Icons.settings),
+                      onPressed: _openHotelGear,
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: Center(
+                  child: SingleChildScrollView(
+                    child: Wrap(
+                      alignment: WrapAlignment.center,
+                      children: [
                 MenuTile(
                   autofocus: true,
                   icon: Icons.tv,
@@ -287,11 +350,14 @@ class _TvHomeState extends State<TvHome> {
                     ),
                     onTap: () => _navSettings(context),
                   ),
-              ],
-            ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-      ),
       ),
     );
   }
