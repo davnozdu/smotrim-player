@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:loader_overlay/loader_overlay.dart';
 import 'package:open_tv/backend/identity_service.dart';
 import 'package:open_tv/backend/restore_service.dart';
-import 'package:open_tv/error.dart';
 import 'package:open_tv/l10n/strings.dart';
 import 'package:open_tv/loading.dart';
 import 'package:open_tv/pin_keypad.dart';
@@ -68,19 +68,29 @@ class _RestorePlaylistPageState extends State<RestorePlaylistPage> {
       );
       return;
     }
-    final result = await Error.tryAsync(
-      () async => await RestoreService.restore(_id, _pin),
-      context,
-      null,
-      true,
-      false,
-    );
-    if (!result.success || !mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(s.restoreSuccess)),
-    );
-    // Back to the shell; the newly restored playlist is already active.
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    context.loaderOverlay.show();
+    try {
+      await RestoreService.restore(_id, _pin);
+      if (!mounted) return;
+      context.loaderOverlay.hide();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.restoreSuccess)),
+      );
+      // Back to the shell; the newly restored playlist is already active.
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } on RestoreException catch (ex) {
+      if (!mounted) return;
+      context.loaderOverlay.hide();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(restoreErrorText(s, ex.code))),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      context.loaderOverlay.hide();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(restoreErrorText(s, RestoreError.network))),
+      );
+    }
   }
 
   Widget _valueRow(String label, IconData icon, String value, VoidCallback onTap,

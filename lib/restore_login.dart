@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:loader_overlay/loader_overlay.dart';
 import 'package:open_tv/backend/identity_service.dart';
 import 'package:open_tv/backend/restore_service.dart';
-import 'package:open_tv/error.dart';
 import 'package:open_tv/l10n/strings.dart';
 import 'package:open_tv/loading.dart';
 import 'package:open_tv/pin_keypad.dart';
@@ -50,21 +50,31 @@ class _RestoreLoginPageState extends State<RestoreLoginPage> {
       );
       return;
     }
-    final result = await Error.tryAsync(
-      () async => await RestoreService.restore(_id, _pin),
-      context,
-      null,
-      true,
-      false,
-    );
-    if (!result.success || !mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(s.restoreSuccess)),
-    );
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const TvHome()),
-      (route) => false,
-    );
+    context.loaderOverlay.show();
+    try {
+      await RestoreService.restore(_id, _pin);
+      if (!mounted) return;
+      context.loaderOverlay.hide();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.restoreSuccess)),
+      );
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const TvHome()),
+        (route) => false,
+      );
+    } on RestoreException catch (ex) {
+      if (!mounted) return;
+      context.loaderOverlay.hide();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(restoreErrorText(s, ex.code))),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      context.loaderOverlay.hide();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(restoreErrorText(s, RestoreError.network))),
+      );
+    }
   }
 
   void _skip() {

@@ -613,6 +613,31 @@ class S {
     'Введите 8-значный ID и 6-значный пин-код',
     'Введіть 8-значний ID та 6-значний пін-код',
   );
+  String get restoreErrBadCredentials => _t(
+    'Wrong ID or PIN',
+    'Неверный ID или пин-код',
+    'Невірний ID або пін-код',
+  );
+  String get restoreErrThrottled => _t(
+    'Too many attempts. Try again later',
+    'Слишком много попыток. Попробуйте позже',
+    'Забагато спроб. Спробуйте пізніше',
+  );
+  String get restoreErrServer => _t(
+    'Server is unavailable. Try again later',
+    'Сервер недоступен. Попробуйте позже',
+    'Сервер недоступний. Спробуйте пізніше',
+  );
+  String get restoreErrNetwork => _t(
+    'No connection to the server',
+    'Нет связи с сервером',
+    'Немає зв’язку із сервером',
+  );
+  String get restoreErrBadPlaylist => _t(
+    'The server returned an invalid playlist',
+    'Сервер вернул некорректный плейлист',
+    'Сервер повернув некоректний плейлист',
+  );
   String get loginTitle => _t('Log in', 'Вход', 'Вхід');
   String get loginSub => _t(
     'Enter your ID and PIN to restore your playlist',
