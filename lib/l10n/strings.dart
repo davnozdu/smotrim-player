@@ -176,6 +176,45 @@ class S {
   String get save => _t('Save', 'Сохранить', 'Зберегти');
   String get next => _t('Next', 'Далее', 'Далі');
   String get back => _t('Back', 'Назад', 'Назад');
+  String get close => _t('Close', 'Закрыть', 'Закрити');
+
+  // Subscription / payment
+  String get renewSubscription =>
+      _t('Renew subscription', 'Продлить подписку', 'Продовжити підписку');
+  String get subscriptionDialogTitle => _t(
+    'Subscription renewal',
+    'Продление подписки',
+    'Продовження підписки',
+  );
+  String get subscriptionScanToPay => _t(
+    'Scan the QR code to pay',
+    'Отсканируйте QR-код для оплаты',
+    'Відскануйте QR-код для оплати',
+  );
+  String get subscriptionAmountLabel => _t('Amount', 'Сумма', 'Сума');
+  String get subscriptionAccountLabel =>
+      _t('Account number', 'Номер счёта', 'Номер рахунку');
+  String get subscriptionIbanLabel => _t('IBAN', 'IBAN', 'IBAN');
+  String get subscriptionBicLabel => _t('BIC/SWIFT', 'BIC/SWIFT', 'BIC/SWIFT');
+  String get subscriptionProcessingHours => _t(
+    'Payments are processed during business hours; on weekends upon request.',
+    'Платежи обрабатываются в рабочее время, в выходные — по запросу.',
+    'Платежі обробляються в робочий час, у вихідні — за запитом.',
+  );
+  String get subscriptionContactLabel =>
+      _t('Payment questions', 'Вопросы по оплате', 'Питання щодо оплати');
+  String get payByTransfer =>
+      _t('Bank transfer', 'Перевести на счёт', 'Переказати на рахунок');
+  String get payByCard => _t('Pay by card', 'Оплатить картой', 'Сплатити карткою');
+  String get subscriptionYourPhone =>
+      _t('Your phone number', 'Ваш номер телефона', 'Ваш номер телефону');
+  String get subscriptionCardPhoneNote => _t(
+    'When paying, include your phone number.',
+    'При оплате укажите свой номер телефона.',
+    'Під час оплати вкажіть свій номер телефону.',
+  );
+  String get subscriptionCardCommission =>
+      _t('Commission: 100 Kč', 'Комиссия: 100 Kč', 'Комісія: 100 Kč');
 
   // Updates
   String updateAvailable(String version) => _t(

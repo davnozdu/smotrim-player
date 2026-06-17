@@ -16,6 +16,7 @@ import 'package:open_tv/models/settings.dart';
 import 'package:open_tv/models/view_type.dart';
 import 'package:open_tv/pin_keypad.dart';
 import 'package:open_tv/settings_view.dart';
+import 'package:open_tv/subscription_dialog.dart';
 import 'package:open_tv/tv_categories.dart';
 import 'package:open_tv/tv_guide.dart';
 import 'package:open_tv/l10n/strings.dart';
@@ -377,6 +378,20 @@ class _TvHomeState extends State<TvHome> {
                   ),
                   onLongPress: unlock,
                 ),
+                if (!widget.hotelMode)
+                  MenuTile(
+                    icon: Icons.card_membership,
+                    label: s.renewSubscription,
+                    color: LinearGradient(
+                      colors: [Colors.purple.shade600, Colors.pink.shade400],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    onTap: () => showDialog(
+                      context: context,
+                      builder: (_) => const SubscriptionDialog(),
+                    ),
+                  ),
                 if (!widget.hotelMode)
                   MenuTile(
                     icon: Icons.history,
