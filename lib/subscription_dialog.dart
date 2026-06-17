@@ -24,7 +24,7 @@ class _Payment {
   /// and the payer's phone are put into the MSG (message for recipient) field,
   /// and the payment type is set to instant (PT:IP).
   static String transferSpayd(String payerPhone, String subscriberId) {
-    final phone = payerPhone.replaceAll(RegExp(r'[*]'), '').trim();
+    final phone = payerPhone.replaceAll(RegExp(r'[*\s]'), '');
     final id = subscriberId.replaceAll(RegExp(r'[*\s]'), '');
     final parts = <String>[
       if (id.isNotEmpty) 'ID:$id',
