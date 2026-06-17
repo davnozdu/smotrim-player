@@ -13,6 +13,7 @@ import 'package:open_tv/backend/sql.dart';
 import 'package:open_tv/backend/utils.dart';
 import 'package:open_tv/correction_modal.dart';
 import 'package:open_tv/home.dart';
+import 'package:open_tv/restore_login.dart';
 import 'package:open_tv/models/filters.dart';
 import 'package:open_tv/models/home_manager.dart';
 import 'package:open_tv/models/source.dart';
@@ -422,6 +423,15 @@ class _SetupState extends State<Setup> {
     }
   }
 
+  // "Restore playlist" tile in the source-type step: opens the ID + PIN flow.
+  // On success it imports the playlist and enters the app (no "skip" button —
+  // the user is already in the wizard and can just go back).
+  void _openRestore() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const RestoreLoginPage(showSkip: false)),
+    );
+  }
+
   void navigateToHome() {
     // Adding a playlist from inside the app (showAppBar): just return to the
     // existing shell (the launcher menu / catalog root) — the new playlist is
@@ -583,12 +593,9 @@ class _SetupState extends State<Setup> {
           null,
         );
       case Steps.sourceType:
-        return getPage(
-          S.of(context).providerType,
-          null,
-          List.generate(SourceType.values.length, (i) {
-            final isLast = i == SourceType.values.length - 1;
-            final card = Card(
+        final tiles = <Widget>[
+          ...List.generate(SourceType.values.length, (i) {
+            return Card(
               color: selectedSourceType.index == i
                   ? Theme.of(context).colorScheme.primaryContainer
                   : Theme.of(context).cardTheme.color,
@@ -607,23 +614,34 @@ class _SetupState extends State<Setup> {
                 },
               ),
             );
-            if (isLast) {
-              return Focus(
-                canRequestFocus: false,
-                onKeyEvent: (node, event) {
-                  if (event is KeyDownEvent &&
-                      event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                    nextButtonFocusNode.requestFocus();
-                    return KeyEventResult.handled;
-                  }
-                  return KeyEventResult.ignored;
-                },
-                child: card,
-              );
-            }
-            return card;
           }),
-        );
+          // Restore an existing playlist by subscriber ID + PIN (same flow as
+          // the login screen). Down from here moves focus to the Next button.
+          Focus(
+            canRequestFocus: false,
+            onKeyEvent: (node, event) {
+              if (event is KeyDownEvent &&
+                  event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                nextButtonFocusNode.requestFocus();
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              elevation: 2,
+              child: ListTile(
+                leading: const Icon(Icons.cloud_download),
+                title: Text(S.of(context).restorePlaylist),
+                subtitle: Text(S.of(context).restorePlaylistSub),
+                onTap: _openRestore,
+              ),
+            ),
+          ),
+        ];
+        return getPage(S.of(context).providerType, null, tiles);
       case Steps.name:
         return getPage(S.of(context).nameQuestion, null, [
           FormBuilder(

@@ -13,7 +13,10 @@ import 'package:open_tv/tv_home.dart';
 /// add-playlist wizard instead. On an update this screen is not shown (the app
 /// already has a playlist / ID) — see main.dart.
 class RestoreLoginPage extends StatefulWidget {
-  const RestoreLoginPage({super.key});
+  // Whether to show the "Skip login" button (true on a clean install; false
+  // when opened from inside the setup wizard, where Back already returns there).
+  final bool showSkip;
+  const RestoreLoginPage({super.key, this.showSkip = true});
 
   @override
   State<RestoreLoginPage> createState() => _RestoreLoginPageState();
@@ -162,11 +165,13 @@ class _RestoreLoginPageState extends State<RestoreLoginPage> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    TextButton(
-                      onPressed: _skip,
-                      child: Text(s.skipLogin),
-                    ),
+                    if (widget.showSkip) ...[
+                      const SizedBox(height: 12),
+                      TextButton(
+                        onPressed: _skip,
+                        child: Text(s.skipLogin),
+                      ),
+                    ],
                   ],
                 ),
               ),
