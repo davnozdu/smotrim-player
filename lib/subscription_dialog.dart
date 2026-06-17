@@ -205,7 +205,11 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
         _note(context, Icons.schedule, l.subscriptionProcessingHours),
       ],
       footer: [
-        _TextButtonFocusable(label: l.back, onPressed: () => _goTo(_PayPage.menu)),
+        _TextButtonFocusable(
+          label: l.back,
+          autofocus: true,
+          onPressed: () => _goTo(_PayPage.menu),
+        ),
         _TextButtonFocusable(
           label: l.close,
           onPressed: () => Navigator.of(context).pop(),
@@ -458,8 +462,13 @@ class _MenuButtonState extends State<_MenuButton> {
 class _TextButtonFocusable extends StatefulWidget {
   final String label;
   final VoidCallback onPressed;
+  final bool autofocus;
 
-  const _TextButtonFocusable({required this.label, required this.onPressed});
+  const _TextButtonFocusable({
+    required this.label,
+    required this.onPressed,
+    this.autofocus = false,
+  });
 
   @override
   State<_TextButtonFocusable> createState() => _TextButtonFocusableState();
@@ -479,6 +488,7 @@ class _TextButtonFocusableState extends State<_TextButtonFocusable> {
             onInvoke: (_) => widget.onPressed()),
       },
       child: Focus(
+        autofocus: widget.autofocus,
         onFocusChange: (hasFocus) {
           setState(() => _focused = hasFocus);
           if (hasFocus) {

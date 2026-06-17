@@ -40,17 +40,28 @@ class _TvHomeState extends State<TvHome> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _autoOpen();
-      _initIdentity();
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _init());
+  }
+
+  // Loads settings once, then runs identity init and the autostart/resume flow
+  // (avoids reading settings twice on launch).
+  Future<void> _init() async {
+    Settings settings;
+    try {
+      settings = await SettingsService.getSettings();
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    await _initIdentity(settings);
+    if (!mounted) return;
+    await _autoOpen(settings);
   }
 
   // Ensures the device has a subscriber ID + PIN, shows the ID on screen, and on
   // first generation pops up the "save your ID and PIN" notice.
-  Future<void> _initIdentity() async {
+  Future<void> _initIdentity(Settings settings) async {
     final res = await IdentityService.ensure();
-    final settings = await SettingsService.getSettings();
     if (!mounted) return;
     setState(() {
       _subscriberId = res.id;
@@ -76,11 +87,10 @@ class _TvHomeState extends State<TvHome> {
 
   // Decides what to play on launch: resume an interrupted stream, or run the
   // autostart action after a real device boot. Otherwise stays on the menu.
-  Future<void> _autoOpen() async {
+  Future<void> _autoOpen(Settings settings) async {
     if (_autoOpened) return;
     _autoOpened = true;
     try {
-      final settings = await SettingsService.getSettings();
       // 1) Resume an interrupted stream (box powered off while watching).
       if (settings.resumePlayback) {
         final idStr = await Sql.getSetting('activeChannelId');
