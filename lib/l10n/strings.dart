@@ -209,9 +209,9 @@ class S {
   String get subscriptionYourPhone =>
       _t('Your phone number', 'Ваш номер телефона', 'Ваш номер телефону');
   String get subscriptionCardPhoneNote => _t(
-    'When paying, include your phone number.',
-    'При оплате укажите свой номер телефона.',
-    'Під час оплати вкажіть свій номер телефону.',
+    'When paying, include your phone number and your subscriber ID.',
+    'При оплате укажите свой номер телефона и ваш ID абонента.',
+    'Під час оплати вкажіть свій номер телефону та ваш ID абонента.',
   );
   String get subscriptionCardCommission =>
       _t('Commission: 100 Kč', 'Комиссия: 100 Kč', 'Комісія: 100 Kč');

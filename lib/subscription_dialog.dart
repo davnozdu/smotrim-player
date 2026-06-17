@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:open_tv/backend/identity_service.dart';
 import 'package:open_tv/l10n/strings.dart';
+import 'package:open_tv/pin_keypad.dart';
 
 /// Subscription renewal payment, ported from the Smotrim.CZ launcher.
 /// Two options: bank transfer (Czech "QR Platba" SPAYD) or card (SumUp link).
@@ -18,11 +20,17 @@ class _Payment {
   /// Card payment link encoded into the QR on the "pay by card" page.
   static const String cardPaymentUrl = "https://pay.sumup.com/b2c/QZFA9XAV";
 
-  /// Czech instant "QR Platba" (SPAYD) for the bank transfer. The payer's phone
-  /// number is put into the MSG (message for recipient) field, and the payment
-  /// type is set to instant (PT:IP).
-  static String transferSpayd(String payerPhone) {
-    final msg = payerPhone.replaceAll(RegExp(r'[*\s]'), '');
+  /// Czech instant "QR Platba" (SPAYD) for the bank transfer. The subscriber ID
+  /// and the payer's phone are put into the MSG (message for recipient) field,
+  /// and the payment type is set to instant (PT:IP).
+  static String transferSpayd(String payerPhone, String subscriberId) {
+    final phone = payerPhone.replaceAll(RegExp(r'[*]'), '').trim();
+    final id = subscriberId.replaceAll(RegExp(r'[*\s]'), '');
+    final parts = <String>[
+      if (id.isNotEmpty) 'ID:$id',
+      if (phone.isNotEmpty) phone,
+    ];
+    final msg = parts.join(' ');
     final msgPart = msg.isEmpty ? '' : '*MSG:$msg';
     return "SPD*1.0*ACC:$iban+$bic*AM:1000.00*CC:CZK*PT:IP$msgPart";
   }
@@ -42,6 +50,16 @@ class SubscriptionDialog extends StatefulWidget {
 class _SubscriptionDialogState extends State<SubscriptionDialog> {
   _PayPage _page = _PayPage.menu;
   String _phone = "";
+  String _id = "";
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill the subscriber ID with the one stored in the player.
+    IdentityService.getOrCreateId().then((id) {
+      if (mounted) setState(() => _id = id);
+    });
+  }
 
   void _goTo(_PayPage page) => setState(() => _page = page);
 
@@ -51,6 +69,16 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
       builder: (_) => _PhoneInputDialog(initial: _phone),
     );
     if (result != null && mounted) setState(() => _phone = result.trim());
+  }
+
+  // 8-digit numeric keypad (reliable on the TV box).
+  Future<void> _editId() async {
+    final v = await showPinKeypad(
+      context,
+      title: S.of(context).yourId,
+      length: subscriberIdLength,
+    );
+    if (v != null && mounted) setState(() => _id = v);
   }
 
   @override
@@ -108,7 +136,7 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
   }
 
   Widget _transferPage(BuildContext context, S l) {
-    final spayd = _Payment.transferSpayd(_phone);
+    final spayd = _Payment.transferSpayd(_phone, _id);
     return _scrollPage(
       context,
       title: l.payByTransfer,
@@ -118,6 +146,12 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
           label: _phone.isEmpty ? l.subscriptionYourPhone : _phone,
           autofocus: true,
           onPressed: _editPhone,
+        ),
+        const SizedBox(height: 12),
+        _MenuButton(
+          icon: Icons.badge,
+          label: _id.isEmpty ? l.yourId : '${l.yourId}: $_id',
+          onPressed: _editId,
         ),
         const SizedBox(height: 16),
         _row(context, l.subscriptionAmountLabel, _Payment.amount, bold: true),
@@ -165,6 +199,7 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
           ),
         ),
         const SizedBox(height: 12),
+        _row(context, l.yourId, _id),
         _note(context, Icons.percent, l.subscriptionCardCommission),
         _note(context, Icons.info_outline, l.subscriptionCardPhoneNote),
         _note(context, Icons.schedule, l.subscriptionProcessingHours),
