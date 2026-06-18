@@ -14,31 +14,35 @@ class _Payment {
   static const String ibanDisplay = "CZ47 2010 0000 0022 0019 8639";
   static const String iban = "CZ4720100000002200198639";
   static const String bic = "FIOBCZPPXXX";
-  static const String amount = "1000 Kč";
   static const String phone = "+420608210867";
 
-  /// Card payment link encoded into the QR on the "pay by card" page.
-  static const String cardPaymentUrl = "https://pay.sumup.com/b2c/QZFA9XAV";
+  /// Card payment links encoded into the QR on the "pay by card" page.
+  static const String renewCardUrl = "https://pay.sumup.com/b2c/QZFA9XAV";
+  static const String becomeCardUrl = "https://pay.sumup.com/b2c/Q2W3D0TB";
 
   /// Czech instant "QR Platba" (SPAYD) for the bank transfer. The subscriber ID
   /// goes into the X-VS (variabilní symbol) field so the payment is matched
-  /// automatically; the email and phone go into the MSG (message) note. Payment
-  /// type is instant (PT:IP).
+  /// automatically; the PIN (new subscriber), email and phone go into the MSG
+  /// (message) note. Payment type is instant (PT:IP).
   static String transferSpayd(
     String payerPhone,
     String subscriberId,
     String email,
-  ) {
+    String amountSpayd, {
+    String pin = '',
+  }) {
     final id = subscriberId.replaceAll(RegExp(r'\D'), ''); // VS = digits only
     final phone = payerPhone.replaceAll(RegExp(r'[*\s]'), '');
     final mail = email.replaceAll(RegExp(r'[*\s]'), '');
+    final pinClean = pin.replaceAll(RegExp(r'\D'), '');
     final msg = [
+      if (pinClean.isNotEmpty) 'PIN:$pinClean',
       if (mail.isNotEmpty) mail,
       if (phone.isNotEmpty) phone,
     ].join(' ');
     final vsPart = id.isEmpty ? '' : '*X-VS:$id';
     final msgPart = msg.isEmpty ? '' : '*MSG:$msg';
-    return "SPD*1.0*ACC:$iban+$bic*AM:1000.00*CC:CZK*PT:IP$vsPart$msgPart";
+    return "SPD*1.0*ACC:$iban+$bic*AM:$amountSpayd*CC:CZK*PT:IP$vsPart$msgPart";
   }
 }
 
@@ -47,7 +51,10 @@ enum _PayPage { menu, transfer, card }
 /// Subscription dialog: a menu with two options (bank transfer / card), each
 /// opening its own card. Fully navigable with the TV remote.
 class SubscriptionDialog extends StatefulWidget {
-  const SubscriptionDialog({super.key});
+  // false = "Renew subscription" (existing subscriber, 1000 Kč, device ID).
+  // true  = "Become a subscriber" (new: 2800 Kč, fresh ID+PIN, activation note).
+  final bool becomeSubscriber;
+  const SubscriptionDialog({super.key, this.becomeSubscriber = false});
 
   @override
   State<SubscriptionDialog> createState() => _SubscriptionDialogState();
@@ -57,15 +64,29 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
   _PayPage _page = _PayPage.menu;
   String _phone = "";
   String _id = "";
+  String _pin = "";
   String _email = "";
+
+  bool get _become => widget.becomeSubscriber;
+  String get _amountDisplay => _become ? '2800 Kč' : '1000 Kč';
+  String get _amountSpayd => _become ? '2800.00' : '1000.00';
+  String get _cardUrl =>
+      _become ? _Payment.becomeCardUrl : _Payment.renewCardUrl;
 
   @override
   void initState() {
     super.initState();
-    // Pre-fill the subscriber ID with the one stored in the player.
-    IdentityService.getOrCreateId().then((id) {
-      if (mounted) setState(() => _id = id);
-    });
+    if (_become) {
+      // New subscriber: fresh ID + PIN, NOT saved until the user logs in.
+      final c = IdentityService.generateCredentials();
+      _id = c.id;
+      _pin = c.pin;
+    } else {
+      // Renew: use the subscriber ID already stored in the player.
+      IdentityService.getOrCreateId().then((id) {
+        if (mounted) setState(() => _id = id);
+      });
+    }
   }
 
   void _goTo(_PayPage page) => setState(() => _page = page);
@@ -134,7 +155,7 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _title(context, l.subscriptionDialogTitle),
+        _title(context, _become ? l.becomeSubscriber : l.subscriptionDialogTitle),
         const SizedBox(height: 20),
         _MenuButton(
           icon: Icons.account_balance,
@@ -161,11 +182,18 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
   }
 
   Widget _transferPage(BuildContext context, S l) {
-    final spayd = _Payment.transferSpayd(_phone, _id, _email);
+    final spayd = _Payment.transferSpayd(
+      _phone,
+      _id,
+      _email,
+      _amountSpayd,
+      pin: _become ? _pin : '',
+    );
     return _scrollPage(
       context,
       title: l.payByTransfer,
       body: [
+        if (_become) ..._becomeHeader(context, l),
         _MenuButton(
           icon: Icons.phone,
           label: _phone.isEmpty ? l.subscriptionYourPhone : _phone,
@@ -173,19 +201,23 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
           onPressed: _editPhone,
         ),
         const SizedBox(height: 12),
-        _MenuButton(
-          icon: Icons.badge,
-          label: _id.isEmpty ? l.yourId : '${l.yourId} (VS): $_id',
-          onPressed: _editId,
-        ),
-        const SizedBox(height: 12),
+        // Renew: the device ID is editable. Become: the ID is freshly generated
+        // and shown read-only in the header above.
+        if (!_become) ...[
+          _MenuButton(
+            icon: Icons.badge,
+            label: _id.isEmpty ? l.yourId : '${l.yourId} (VS): $_id',
+            onPressed: _editId,
+          ),
+          const SizedBox(height: 12),
+        ],
         _MenuButton(
           icon: Icons.email,
           label: _email.isEmpty ? l.yourEmail : _email,
           onPressed: _editEmail,
         ),
         const SizedBox(height: 16),
-        _row(context, l.subscriptionAmountLabel, _Payment.amount, bold: true),
+        _row(context, l.subscriptionAmountLabel, _amountDisplay, bold: true),
         _row(context, l.subscriptionAccountLabel, _Payment.accountNumber),
         _row(context, l.subscriptionIbanLabel, _Payment.ibanDisplay),
         _row(context, l.subscriptionBicLabel, _Payment.bic),
@@ -221,7 +253,8 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
       context,
       title: l.payByCard,
       body: [
-        _qr(_Payment.cardPaymentUrl),
+        if (_become) ..._becomeHeader(context, l),
+        _qr(_cardUrl),
         const SizedBox(height: 8),
         Center(
           child: Text(
@@ -230,7 +263,7 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
           ),
         ),
         const SizedBox(height: 12),
-        _row(context, l.yourId, _id),
+        if (!_become) _row(context, l.yourId, _id),
         _note(context, Icons.percent, l.subscriptionCardCommission),
         _note(context, Icons.info_outline, l.subscriptionCardPhoneNote),
         _note(context, Icons.schedule, l.subscriptionProcessingHours),
@@ -247,6 +280,26 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
         ),
       ],
     );
+  }
+
+  // Header shown only for "become a subscriber": the activation note (first
+  // position) plus the freshly generated ID and PIN to save.
+  List<Widget> _becomeHeader(BuildContext context, S l) {
+    return [
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(l.becomeNote, style: Theme.of(context).textTheme.bodyMedium),
+      ),
+      const SizedBox(height: 12),
+      _row(context, l.yourId, _id, bold: true),
+      _row(context, l.yourPin, _pin, bold: true),
+      _note(context, Icons.save_alt, l.becomeSaveCredentials),
+      const SizedBox(height: 8),
+    ];
   }
 
   // ---- Building blocks -----------------------------------------------------

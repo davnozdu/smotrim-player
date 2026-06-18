@@ -216,6 +216,25 @@ class S {
   );
   String get subscriptionCardCommission =>
       _t('Commission: 100 Kč', 'Комиссия: 100 Kč', 'Комісія: 100 Kč');
+  String get becomeSubscriber =>
+      _t('Become a subscriber', 'Стать абонентом', 'Стати абонентом');
+  String get becomeNote => _t(
+    "The price includes subscription activation and a one-year membership. "
+        "Next year's renewal is 1000 CZK. After activation you will receive "
+        "your login details.",
+    'Стоимость включает активацию подписки и годовой абонемент. Следующий год '
+        'продления — 1000 крон. После активации абонемента вы получите данные '
+        'для входа.',
+    'Вартість включає активацію підписки та річний абонемент. Наступний рік '
+        'продовження — 1000 крон. Після активації абонемента ви отримаєте дані '
+        'для входу.',
+  );
+  String get yourPin => _t('Your PIN', 'Ваш PIN', 'Ваш PIN');
+  String get becomeSaveCredentials => _t(
+    'Save your ID and PIN — these are your login details.',
+    'Сохраните ID и PIN — это ваши данные для входа.',
+    'Збережіть ID та PIN — це ваші дані для входу.',
+  );
 
   // Updates
   String updateAvailable(String version) => _t(

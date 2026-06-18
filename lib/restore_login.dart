@@ -6,6 +6,7 @@ import 'package:open_tv/l10n/strings.dart';
 import 'package:open_tv/loading.dart';
 import 'package:open_tv/pin_keypad.dart';
 import 'package:open_tv/setup.dart';
+import 'package:open_tv/subscription_dialog.dart';
 import 'package:open_tv/tv_home.dart';
 
 /// First screen on a clean install: the subscriber enters their ID + PIN to
@@ -86,6 +87,15 @@ class _RestoreLoginPageState extends State<RestoreLoginPage> {
     );
   }
 
+  // For users without a subscription yet: opens the "become a subscriber"
+  // payment (2800 Kč, fresh ID + PIN). They log in afterwards with those.
+  void _become() {
+    showDialog(
+      context: context,
+      builder: (_) => const SubscriptionDialog(becomeSubscriber: true),
+    );
+  }
+
   Widget _valueRow(
     String label,
     IconData icon,
@@ -161,6 +171,18 @@ class _RestoreLoginPageState extends State<RestoreLoginPage> {
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 32,
+                          vertical: 16,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _become,
+                      icon: const Icon(Icons.how_to_reg),
+                      label: Text(s.becomeSubscriber),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 28,
                           vertical: 16,
                         ),
                       ),

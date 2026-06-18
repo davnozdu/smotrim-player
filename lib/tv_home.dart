@@ -390,6 +390,24 @@ class _TvHomeState extends State<TvHome> {
                 ),
                 if (!widget.hotelMode)
                   MenuTile(
+                    icon: Icons.how_to_reg,
+                    label: s.becomeSubscriber,
+                    color: LinearGradient(
+                      colors: [Colors.green.shade700, Colors.lightGreen.shade400],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    onTap: () => showDialog(
+                      context: context,
+                      builder: (_) =>
+                          const SubscriptionDialog(becomeSubscriber: true),
+                    ),
+                  ),
+                // Force a line break so "Renew subscription" starts a new row.
+                if (!widget.hotelMode)
+                  const SizedBox(width: double.infinity),
+                if (!widget.hotelMode)
+                  MenuTile(
                     icon: Icons.card_membership,
                     label: s.renewSubscription,
                     color: LinearGradient(

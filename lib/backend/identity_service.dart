@@ -43,6 +43,13 @@ class IdentityService {
 
   static Future<String?> getPin() async => Sql.getSetting(_subscriberPinKey);
 
+  // Fresh ID + PIN that is NOT stored. Used by "become a subscriber": the new
+  // credentials are only adopted once the user logs in with them.
+  static ({String id, String pin}) generateCredentials() => (
+        id: _digits(subscriberIdLength),
+        pin: _digits(subscriberPinLength),
+      );
+
   // Adopt an entered ID + PIN as this device's identity (after a successful
   // login/restore), so the home screen shows the subscriber's own ID.
   static Future<void> save(String id, String pin) async {
