@@ -67,6 +67,7 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
   String _id = "";
   String _pin = "";
   String _email = "";
+  final ScrollController _scrollController = ScrollController();
 
   bool get _become => widget.becomeSubscriber;
   String get _amountDisplay => _become ? '2800 Kč' : '1000 Kč';
@@ -94,7 +95,45 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
     }
   }
 
-  void _goTo(_PayPage page) => setState(() => _page = page);
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _goTo(_PayPage page) {
+    // Reset the scroll offset so each page opens from the top.
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
+    setState(() => _page = page);
+  }
+
+  // D-pad handling for the payment pages: first try to move focus between the
+  // focusable buttons; if there is nothing focusable further in that direction
+  // (e.g. the read-only header, QR or notes), scroll the page instead — so the
+  // user can always go back up to see the activation note / ID / PIN.
+  KeyEventResult _handleScrollKey(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+    final TraversalDirection? dir = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowUp => TraversalDirection.up,
+      LogicalKeyboardKey.arrowDown => TraversalDirection.down,
+      _ => null,
+    };
+    if (dir == null) return KeyEventResult.ignored;
+    final moved =
+        FocusManager.instance.primaryFocus?.focusInDirection(dir) ?? false;
+    if (moved) return KeyEventResult.handled;
+    if (!_scrollController.hasClients) return KeyEventResult.handled;
+    final pos = _scrollController.position;
+    final target = (_scrollController.offset +
+            (dir == TraversalDirection.down ? 140.0 : -140.0))
+        .clamp(0.0, pos.maxScrollExtent);
+    _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOut,
+    );
+    return KeyEventResult.handled;
+  }
 
   Future<void> _editPhone() async {
     final result = await showDialog<String>(
@@ -161,7 +200,22 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _title(context, _become ? l.becomeSubscriber : l.subscriptionDialogTitle),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
+        if (_become) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              l.becomeMenuNote,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
         _MenuButton(
           icon: Icons.account_balance,
           label: l.payByTransfer,
@@ -320,17 +374,23 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
         _title(context, title),
         const SizedBox(height: 12),
         Flexible(
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                ...body,
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: footer,
-                ),
-              ],
+          child: Focus(
+            canRequestFocus: false,
+            skipTraversal: true,
+            onKeyEvent: _handleScrollKey,
+            child: SingleChildScrollView(
+              controller: _scrollController,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ...body,
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: footer,
+                  ),
+                ],
+              ),
             ),
           ),
         ),

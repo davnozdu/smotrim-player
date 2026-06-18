@@ -229,6 +229,18 @@ class S {
         'продовження — 1000 крон. Після активації абонемента ви отримаєте дані '
         'для входу.',
   );
+  // Shown on the "become a subscriber" payment-method menu.
+  String get becomeMenuNote => _t(
+    'The activation starter kit includes a one-year membership. '
+        "Next year's renewal is 1000 CZK. After activation you will receive a "
+        'confirmation to your email. Choose a payment method.',
+    'Стартовый комплект активации включает годовой абонемент. Следующий год '
+        'продления — 1000 крон. После активации вы получите подтверждение на '
+        'свой email. Выберите способ оплаты.',
+    'Стартовий комплект активації включає річний абонемент. Наступний рік '
+        'продовження — 1000 крон. Після активації ви отримаєте підтвердження '
+        'на свій email. Виберіть спосіб оплати.',
+  );
   String get yourPin => _t('Your PIN', 'Ваш PIN', 'Ваш PIN');
   String get becomeSaveCredentials => _t(
     'Save your ID and PIN — these are your login details.',
