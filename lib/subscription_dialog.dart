@@ -36,9 +36,10 @@ class _Payment {
     final mail = email.replaceAll(RegExp(r'[*\s]'), '');
     final pinClean = pin.replaceAll(RegExp(r'\D'), '');
     final msg = [
+      if (id.isNotEmpty) 'ID:$id',
       if (pinClean.isNotEmpty) 'PIN:$pinClean',
-      if (mail.isNotEmpty) mail,
-      if (phone.isNotEmpty) phone,
+      if (mail.isNotEmpty) 'Email:$mail',
+      if (phone.isNotEmpty) 'Tel:$phone',
     ].join(' ');
     final vsPart = id.isEmpty ? '' : '*X-VS:$id';
     final msgPart = msg.isEmpty ? '' : '*MSG:$msg';
@@ -82,9 +83,13 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
       _id = c.id;
       _pin = c.pin;
     } else {
-      // Renew: use the subscriber ID already stored in the player.
+      // Renew: use the subscriber ID + PIN already stored in the player (the
+      // PIN is only used in the payment note, not shown).
       IdentityService.getOrCreateId().then((id) {
         if (mounted) setState(() => _id = id);
+      });
+      IdentityService.getOrCreatePin().then((pin) {
+        if (mounted) setState(() => _pin = pin);
       });
     }
   }
@@ -197,7 +202,6 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
         _MenuButton(
           icon: Icons.phone,
           label: _phone.isEmpty ? l.subscriptionYourPhone : _phone,
-          autofocus: true,
           onPressed: _editPhone,
         ),
         const SizedBox(height: 12),
@@ -271,7 +275,6 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
       footer: [
         _TextButtonFocusable(
           label: l.back,
-          autofocus: true,
           onPressed: () => _goTo(_PayPage.menu),
         ),
         _TextButtonFocusable(
@@ -370,7 +373,7 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
             ),
           ),
           Expanded(
-            child: SelectableText(
+            child: Text(
               value,
               style: theme.textTheme.bodyLarge?.copyWith(
                 fontWeight: bold ? FontWeight.bold : FontWeight.w500,

@@ -176,11 +176,13 @@ class _RestoreLoginPageState extends State<RestoreLoginPage> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    OutlinedButton.icon(
+                    FilledButton.icon(
                       onPressed: _become,
                       icon: const Icon(Icons.how_to_reg),
                       label: Text(s.becomeSubscriber),
-                      style: OutlinedButton.styleFrom(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.red.shade700,
+                        foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(
                           horizontal: 28,
                           vertical: 16,
