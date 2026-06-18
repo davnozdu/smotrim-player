@@ -21,18 +21,24 @@ class _Payment {
   static const String cardPaymentUrl = "https://pay.sumup.com/b2c/QZFA9XAV";
 
   /// Czech instant "QR Platba" (SPAYD) for the bank transfer. The subscriber ID
-  /// and the payer's phone are put into the MSG (message for recipient) field,
-  /// and the payment type is set to instant (PT:IP).
-  static String transferSpayd(String payerPhone, String subscriberId) {
+  /// goes into the X-VS (variabilní symbol) field so the payment is matched
+  /// automatically; the email and phone go into the MSG (message) note. Payment
+  /// type is instant (PT:IP).
+  static String transferSpayd(
+    String payerPhone,
+    String subscriberId,
+    String email,
+  ) {
+    final id = subscriberId.replaceAll(RegExp(r'\D'), ''); // VS = digits only
     final phone = payerPhone.replaceAll(RegExp(r'[*\s]'), '');
-    final id = subscriberId.replaceAll(RegExp(r'[*\s]'), '');
-    final parts = <String>[
-      if (id.isNotEmpty) 'ID:$id',
+    final mail = email.replaceAll(RegExp(r'[*\s]'), '');
+    final msg = [
+      if (mail.isNotEmpty) mail,
       if (phone.isNotEmpty) phone,
-    ];
-    final msg = parts.join(' ');
+    ].join(' ');
+    final vsPart = id.isEmpty ? '' : '*X-VS:$id';
     final msgPart = msg.isEmpty ? '' : '*MSG:$msg';
-    return "SPD*1.0*ACC:$iban+$bic*AM:1000.00*CC:CZK*PT:IP$msgPart";
+    return "SPD*1.0*ACC:$iban+$bic*AM:1000.00*CC:CZK*PT:IP$vsPart$msgPart";
   }
 }
 
@@ -51,6 +57,7 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
   _PayPage _page = _PayPage.menu;
   String _phone = "";
   String _id = "";
+  String _email = "";
 
   @override
   void initState() {
@@ -66,9 +73,27 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
   Future<void> _editPhone() async {
     final result = await showDialog<String>(
       context: context,
-      builder: (_) => _PhoneInputDialog(initial: _phone),
+      builder: (_) => _TextEntryDialog(
+        title: S.of(context).subscriptionYourPhone,
+        initial: _phone,
+        keyboardType: TextInputType.phone,
+        icon: Icons.phone,
+      ),
     );
     if (result != null && mounted) setState(() => _phone = result.trim());
+  }
+
+  Future<void> _editEmail() async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (_) => _TextEntryDialog(
+        title: S.of(context).yourEmail,
+        initial: _email,
+        keyboardType: TextInputType.emailAddress,
+        icon: Icons.email,
+      ),
+    );
+    if (result != null && mounted) setState(() => _email = result.trim());
   }
 
   // 8-digit numeric keypad (reliable on the TV box).
@@ -136,7 +161,7 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
   }
 
   Widget _transferPage(BuildContext context, S l) {
-    final spayd = _Payment.transferSpayd(_phone, _id);
+    final spayd = _Payment.transferSpayd(_phone, _id, _email);
     return _scrollPage(
       context,
       title: l.payByTransfer,
@@ -150,8 +175,14 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
         const SizedBox(height: 12),
         _MenuButton(
           icon: Icons.badge,
-          label: _id.isEmpty ? l.yourId : '${l.yourId}: $_id',
+          label: _id.isEmpty ? l.yourId : '${l.yourId} (VS): $_id',
           onPressed: _editId,
+        ),
+        const SizedBox(height: 12),
+        _MenuButton(
+          icon: Icons.email,
+          label: _email.isEmpty ? l.yourEmail : _email,
+          onPressed: _editEmail,
         ),
         const SizedBox(height: 16),
         _row(context, l.subscriptionAmountLabel, _Payment.amount, bold: true),
@@ -314,17 +345,25 @@ class _SubscriptionDialogState extends State<SubscriptionDialog> {
   }
 }
 
-/// Collects the payer's phone number. On this TV box the soft keyboard only
+/// Collects a text value (phone / email). On this TV box the soft keyboard only
 /// opens on a tap / focus push, so the field forces it open when focused.
-class _PhoneInputDialog extends StatefulWidget {
+class _TextEntryDialog extends StatefulWidget {
+  final String title;
   final String initial;
-  const _PhoneInputDialog({required this.initial});
+  final TextInputType keyboardType;
+  final IconData icon;
+  const _TextEntryDialog({
+    required this.title,
+    required this.initial,
+    required this.keyboardType,
+    required this.icon,
+  });
 
   @override
-  State<_PhoneInputDialog> createState() => _PhoneInputDialogState();
+  State<_TextEntryDialog> createState() => _TextEntryDialogState();
 }
 
-class _PhoneInputDialogState extends State<_PhoneInputDialog> {
+class _TextEntryDialogState extends State<_TextEntryDialog> {
   late final TextEditingController _controller =
       TextEditingController(text: widget.initial);
   final FocusNode _focusNode = FocusNode();
@@ -350,18 +389,18 @@ class _PhoneInputDialogState extends State<_PhoneInputDialog> {
   Widget build(BuildContext context) {
     final l = S.of(context);
     return AlertDialog(
-      title: Text(l.subscriptionYourPhone),
+      title: Text(widget.title),
       content: TextField(
         controller: _controller,
         focusNode: _focusNode,
         autofocus: true,
-        keyboardType: TextInputType.phone,
+        keyboardType: widget.keyboardType,
         textInputAction: TextInputAction.done,
         onSubmitted: (value) => Navigator.of(context).pop(value),
         style: const TextStyle(color: Colors.white),
-        decoration: const InputDecoration(
-          prefixIcon: Icon(Icons.phone),
-          border: OutlineInputBorder(),
+        decoration: InputDecoration(
+          prefixIcon: Icon(widget.icon),
+          border: const OutlineInputBorder(),
         ),
       ),
       actions: [

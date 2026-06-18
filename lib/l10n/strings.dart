@@ -208,10 +208,11 @@ class S {
   String get payByCard => _t('Pay by card', 'Оплатить картой', 'Сплатити карткою');
   String get subscriptionYourPhone =>
       _t('Your phone number', 'Ваш номер телефона', 'Ваш номер телефону');
+  String get yourEmail => _t('Your email', 'Ваш email', 'Ваш email');
   String get subscriptionCardPhoneNote => _t(
-    'When paying, include your phone number and your subscriber ID.',
-    'При оплате укажите свой номер телефона и ваш ID абонента.',
-    'Під час оплати вкажіть свій номер телефону та ваш ID абонента.',
+    'When paying, include your phone number, your subscriber ID and email.',
+    'При оплате укажите свой номер телефона, свой ID абонента и email.',
+    'Під час оплати вкажіть свій номер телефону, ваш ID абонента та email.',
   );
   String get subscriptionCardCommission =>
       _t('Commission: 100 Kč', 'Комиссия: 100 Kč', 'Комісія: 100 Kč');
