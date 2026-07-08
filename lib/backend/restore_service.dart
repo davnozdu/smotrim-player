@@ -40,35 +40,43 @@ String restoreErrorText(S s, RestoreError code) {
 
 /// Restores the subscriber's playlist from the server using their ID + PIN.
 ///
-/// The playlist.php endpoint returns the M3U on HTTP 200. It is served from two
-/// interchangeable hosts (same database): tv.smotrim.cz is tried first because
-/// it has no bot-protection, then api.smotrim.cz. A host that is unreachable,
-/// not deployed (404) or blocked by a hosting anti-bot challenge (401/HTML) is
-/// skipped and the next one is tried. Definitive answers from a working
-/// endpoint — 400 (bad input), 403 (wrong id/pin), 429 (throttled) — stop the
-/// search immediately and map to a clear error.
+/// The endpoint returns the M3U on HTTP 200. It is served from two
+/// interchangeable endpoints backed by the same subscribers database:
+/// tv.smotrim.cz/playlist.php (primary) and api.smotrim.cz/sub.php (backup).
+///
+/// NOTE: api uses the path /sub.php (not /playlist.php) on purpose — on api,
+/// playlist.php is a separate token-protected endpoint for the WEB player and
+/// must not be used here; sub.php is the app-only id+pin mirror.
+///
+/// An endpoint that is unreachable, not deployed (404) or otherwise not
+/// returning a real M3U is skipped and the next one is tried. Definitive
+/// answers from a working endpoint — 400 (bad input), 403 (wrong id/pin),
+/// 429 (throttled) — stop the search immediately and map to a clear error.
 class RestoreService {
-  // Ordered by preference. Both hosts hit the same subscribers database.
-  static const apiBases = ['https://tv.smotrim.cz', 'https://api.smotrim.cz'];
+  // Ordered by preference. Both hit the same subscribers database.
+  static const endpoints = [
+    'https://tv.smotrim.cz/playlist.php',
+    'https://api.smotrim.cz/sub.php',
+  ];
   // Stable source name so re-restoring updates the same playlist.
   static const sourceName = 'Smotrim CZ';
 
-  static String _playlistUrl(String base, String id, String pin) =>
-      '$base/playlist.php'
+  static String _url(String endpoint, String id, String pin) =>
+      '$endpoint'
       '?id=${Uri.encodeQueryComponent(id)}'
       '&pin=${Uri.encodeQueryComponent(pin)}';
 
   static Future<void> restore(String id, String pin) async {
-    // 1) Fetch the playlist, trying each host until one returns a real M3U.
+    // 1) Fetch the playlist, trying each endpoint until one returns a real M3U.
     final client = http.Client();
     String? body;
     String? usedUrl;
-    // Remembered when a host fails "softly" (network/blocked/not-deployed) so we
-    // can surface a sensible error if every host fails that way.
+    // Remembered when an endpoint fails "softly" (network/blocked/not-deployed)
+    // so we can surface a sensible error if every endpoint fails that way.
     RestoreError softError = RestoreError.network;
     try {
-      for (final base in apiBases) {
-        final url = _playlistUrl(base, id, pin);
+      for (final endpoint in endpoints) {
+        final url = _url(endpoint, id, pin);
         try {
           final resp = await client
               .get(Uri.parse(url))
