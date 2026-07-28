@@ -375,7 +375,7 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
 
   Future<void> _init() async {
     // Start directly in archive when a past programme was picked from the guide.
-    if (_isLive && widget.archiveStart != null) {
+    if (_isLive && widget.archiveStart != null && _ch.hasCatchup) {
       final startEpoch =
           widget.archiveStart!.toUtc().millisecondsSinceEpoch ~/ 1000;
       final url = _timeshiftUrl(startEpoch);
@@ -596,7 +596,12 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     final all = _programs ?? await fetchPrograms(url, _ch.name);
     _programs = all;
     final now = epgNow();
-    final from = now.subtract(Duration(days: extended ? 7 : 2));
+    // Never list further back than the provider keeps — those entries would
+    // just play nothing.
+    var days = extended ? 7 : 2;
+    final kept = _ch.catchupDays;
+    if (kept != null && kept > 0 && kept < days) days = kept;
+    final from = now.subtract(Duration(days: days));
     return all
         .where((p) => p.start.isAfter(from) && p.start.isBefore(now))
         .toList()
@@ -659,7 +664,10 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     ),
     _ControlAction(Icons.audiotrack, _openAudioModal),
     _ControlAction(Icons.aspect_ratio, _cycleAspect),
-    if (_isLive) _ControlAction(Icons.history, _openArchiveMenu),
+    // Only when the provider actually keeps an archive for this channel:
+    // asking a channel with tvg-rec="0" for catchup returns an empty playlist.
+    if (_isLive && _ch.hasCatchup)
+      _ControlAction(Icons.history, _openArchiveMenu),
   ];
 
   int _aspectIdx = 0;

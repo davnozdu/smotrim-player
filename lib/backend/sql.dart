@@ -32,8 +32,8 @@ class Sql {
       insertChannel(Channel channel) {
     return (SqliteWriteContext tx, Map<String, String> memory) async {
       await tx.execute('''
-        INSERT INTO channels (name, search_name, image, url, source_id, media_type, series_id, favorite, stream_id, group_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO channels (name, search_name, image, url, source_id, media_type, series_id, favorite, stream_id, group_name, catchup_days)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (name, source_id)
         DO UPDATE SET
           url = excluded.url,
@@ -41,7 +41,8 @@ class Sql {
           media_type = excluded.media_type,
           stream_id = excluded.stream_id,
           image = excluded.image,
-          series_id = excluded.series_id;
+          series_id = excluded.series_id,
+          catchup_days = excluded.catchup_days;
       ''', [
         channel.name,
         channel.name.toLowerCase(),
@@ -54,7 +55,8 @@ class Sql {
         channel.seriesId,
         channel.favorite,
         channel.streamId,
-        channel.group
+        channel.group,
+        channel.catchupDays
       ]);
       memory['lastChannelId'] =
           (await tx.get("SELECT last_insert_rowid()")).columnAt(0).toString();
@@ -240,6 +242,9 @@ class Sql {
       favorite: row.columnAt(7) == 1,
       seriesId: row.columnAt(8),
       groupId: row.columnAt(9),
+      // By name, not index: this column was added by a later migration, so its
+      // position depends on the order the migrations ran.
+      catchupDays: row['catchup_days'] as int?,
     );
   }
 

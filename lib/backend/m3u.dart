@@ -19,6 +19,11 @@ final idRegex = RegExp(r'tvg-id="([^"]*)"');
 final logoRegex = RegExp(r'tvg-logo="([^"]*)"');
 final groupRegex = RegExp(r'group-title="([^"]*)"');
 final extGrpRegex = RegExp(r'#EXTGRP:(.*)', caseSensitive: false);
+// Days of catchup the provider keeps for the channel. `tvg-rec` is what this
+// provider emits; `catchup-days` is the other common spelling. 0 means the
+// channel has no archive — asking for one just returns an empty playlist.
+final catchupDaysRegex =
+    RegExp(r'(?:tvg-rec|catchup-days)="(\d+)"', caseSensitive: false);
 final httpOriginRegex = RegExp(r'http-origin=(.+)');
 final httpReferrerRegex = RegExp(r'http-referrer=(.+)');
 final httpUserAgentRegex = RegExp(r'http-user-agent=(.+)');
@@ -138,6 +143,8 @@ Channel? getChannelFromLines(
     group = extGroup;
   }
 
+  final rec = catchupDaysRegex.firstMatch(l1)?[1];
+
   return Channel(
     name: name,
     group: group,
@@ -146,6 +153,7 @@ Channel? getChannelFromLines(
     mediaType: getMediaType(url),
     sourceId: -1,
     url: url,
+    catchupDays: rec == null ? null : int.tryParse(rec),
   );
 }
 

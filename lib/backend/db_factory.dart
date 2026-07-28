@@ -136,6 +136,13 @@ class DbFactory {
             [(row.columnAt(1) as String?)?.toLowerCase(), row.columnAt(0)],
           );
         }
+      }))
+      ..add(SqliteMigration(5, (tx) async {
+        // Days of catchup the provider keeps (playlist `tvg-rec`). Left NULL on
+        // existing rows: unknown means "assume it has one" so the archive keeps
+        // working until the playlist is refreshed and the real value arrives.
+        await tx.execute(
+            'ALTER TABLE channels ADD COLUMN catchup_days integer;');
       }));
     await migrations.migrate(db);
     return db;

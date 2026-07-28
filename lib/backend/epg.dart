@@ -96,14 +96,37 @@ const _countryTokens = {
   'hr', 'bg', 'ee', 'lv', 'lt',
 };
 final _parensRegex = RegExp(r'\([^)]*\)');
-final _shiftRegex = RegExp(r'\+\d+');
 final _splitRegex = RegExp(r'[^0-9a-zа-яё]+');
 
+// A timezone-shifted feed: "Первый канал +2", "НТВ (+4)", "Россия 1 (-1)".
+// The sign must not be glued to a digit on either side, so channel names that
+// merely contain a plus ("1+1", "1+2") are not mistaken for a shift.
+final _shiftTokenRegex = RegExp(r'(^|[^0-9a-zа-яё])([+-]\d{1,2})(?![0-9])');
+
+/// The timezone shift a channel name declares, in hours (0 when none).
+int channelShiftHours(String name) {
+  final m = _shiftTokenRegex.firstMatch(name.toLowerCase());
+  if (m == null) return 0;
+  return int.tryParse(m.group(2)!) ?? 0;
+}
+
 /// Looser normalization for matching against EPGs that lack quality/region
-/// display-name variants: strips HD/UHD/4K/+N/(region)/country tokens.
+/// display-name variants: strips HD/UHD/4K/(region)/country tokens.
+///
+/// The `+N` shift is deliberately NOT stripped — it is kept as a suffix on the
+/// key. A shifted feed broadcasts a different schedule from the base channel,
+/// so merging them (as this used to) attaches the wrong programme list: picking
+/// a show from the guide then opens the archive at a moment when something else
+/// was on. Regions in brackets ("+0 (Липецк)") still collapse into the base
+/// key — those run the base schedule on the same clock.
 String normalizeChannelNameLoose(String name) {
   var s = name.toLowerCase().replaceAll('&amp;', '&');
-  s = s.replaceAll(_parensRegex, '').replaceAll(_shiftRegex, '');
+  final shift = channelShiftHours(s);
+  s = s.replaceAll(_parensRegex, '');
+  // Drop only a genuine shift token, keeping the separator that preceded it.
+  // A blanket `[+-]\d+` strip would also eat the second half of "1+1" / "1+2"
+  // and collapse those two channels onto the same key.
+  s = s.replaceAllMapped(_shiftTokenRegex, (m) => m.group(1)!);
   final out = <String>[];
   for (final t in s.split(_splitRegex)) {
     if (t.isEmpty || _qualTokens.contains(t) || _countryTokens.contains(t)) {
@@ -111,7 +134,9 @@ String normalizeChannelNameLoose(String name) {
     }
     out.add(t);
   }
-  return out.join();
+  final base = out.join();
+  if (base.isEmpty || shift == 0) return base;
+  return '$base@$shift';
 }
 
 // Simple in-memory cache so refreshing several sources in a row doesn't

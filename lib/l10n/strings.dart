@@ -51,6 +51,11 @@ class S {
     'Нет архивных передач для этого канала',
     'Немає архівних передач для цього каналу',
   );
+  String get noArchiveForChannel => _t(
+    'This channel has no archive — playing live',
+    'У этого канала нет архива — включён эфир',
+    'У цього каналу немає архіву — увімкнено ефір',
+  );
   String get selectAudio => _t('Select audio', 'Выбор аудио', 'Вибір аудіо');
   String programLeft(int min) => _t(
     '$min min left',

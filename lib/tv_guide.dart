@@ -311,7 +311,18 @@ class _TvGuideState extends State<TvGuide> {
     final p = row.programs[_col];
     if (p.start.isAfter(now)) return; // future programme — nothing to play yet
     final isLive = !p.start.isAfter(now) && p.stop.isAfter(now);
-    _play(row.channel, isLive ? null : p.start);
+    // A past programme on a channel the provider keeps no archive for would
+    // open an empty stream — play it live instead of showing a black screen.
+    final archive = !isLive && row.channel.hasCatchup;
+    if (!isLive && !archive) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(S.of(context).noArchiveForChannel),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+    _play(row.channel, archive ? p.start : null);
   }
 
   void _play(Channel channel, DateTime? archiveStart) {
