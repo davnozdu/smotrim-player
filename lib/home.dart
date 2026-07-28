@@ -92,11 +92,14 @@ class _HomeState extends State<Home> {
     // Fetch "now playing" for the catalog tiles in the background, and keep it
     // current while the catalog is open (programmes roll over).
     SettingsService.getSettings().then((s) {
-      refreshNowPlaying(s.epgUrl);
+      // Same source as the guide and the player, so all three share one parsed
+      // EPG instead of the catalog pulling a second feed of its own.
+      final epgUrl = s.extendedArchive ? archiveEpgUrl : s.epgUrl;
+      refreshNowPlaying(epgUrl);
       _nowPlayingTimer?.cancel();
       _nowPlayingTimer = Timer.periodic(
         const Duration(minutes: 1),
-        (_) => refreshNowPlaying(s.epgUrl),
+        (_) => refreshNowPlaying(epgUrl),
       );
     });
     if (widget.refresh) {

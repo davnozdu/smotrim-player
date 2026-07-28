@@ -102,7 +102,13 @@ class _RestoreLoginPageState extends State<RestoreLoginPage> {
     String value,
     VoidCallback onTap, {
     bool autofocus = false,
+    bool obscure = false,
   }) {
+    // The PIN is shown as bullets — it stays secret from anyone in the room,
+    // while the count still tells the user how many digits went in.
+    final shown = value.isEmpty
+        ? '—'
+        : (obscure ? '●' * value.length : value);
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: ListTile(
@@ -110,8 +116,12 @@ class _RestoreLoginPageState extends State<RestoreLoginPage> {
         leading: Icon(icon),
         title: Text(label, style: const TextStyle(fontSize: 13)),
         subtitle: Text(
-          value.isEmpty ? '—' : value,
-          style: const TextStyle(fontSize: 18, color: Colors.white),
+          shown,
+          style: TextStyle(
+            fontSize: 18,
+            color: Colors.white,
+            letterSpacing: obscure && value.isNotEmpty ? 4 : null,
+          ),
         ),
         trailing: const Icon(Icons.edit, size: 18),
         onTap: onTap,
@@ -162,6 +172,7 @@ class _RestoreLoginPageState extends State<RestoreLoginPage> {
                       Icons.password,
                       _pin,
                       _editPin,
+                      obscure: true,
                     ),
                     const SizedBox(height: 20),
                     FilledButton.icon(

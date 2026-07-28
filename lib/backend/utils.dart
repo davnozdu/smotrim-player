@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:open_tv/backend/epg.dart';
 import 'package:open_tv/backend/m3u.dart';
 import 'package:open_tv/backend/sql.dart';
 import 'package:open_tv/backend/xtream.dart';
@@ -42,6 +43,9 @@ class Utils {
         await getXtream(source, wipe);
         break;
     }
+    // The channel list decides which channels the EPG is parsed for — drop the
+    // cached scope (and the guides built with it) so new channels get EPG.
+    invalidateEpgScope();
   }
 
   static Future<void> refreshAllSources() async {

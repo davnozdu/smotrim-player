@@ -76,11 +76,7 @@ class _TvGuideState extends State<TvGuide> {
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
-    final flooredMin = now.minute < 30 ? 0 : 30;
-    _windowStart = DateTime(now.year, now.month, now.day, now.hour, flooredMin)
-        .subtract(const Duration(hours: 1));
-    _windowEnd = _windowStart.add(const Duration(hours: 30));
+    _computeWindow();
     _vBody.addListener(() {
       if (_vLeft.hasClients && _vLeft.offset != _vBody.offset) {
         _vLeft.jumpTo(_vBody.offset);
@@ -106,6 +102,18 @@ class _TvGuideState extends State<TvGuide> {
     _load();
   }
 
+  // The visible time span, half-hour aligned around "now". Starts 6 hours in
+  // the past so recent programmes are reachable from here: pressing OK on one
+  // that already ended opens it in the archive. One hour (the old value) made
+  // the guide almost useless for catchup.
+  void _computeWindow() {
+    final now = epgNow().toLocal();
+    final flooredMin = now.minute < 30 ? 0 : 30;
+    _windowStart = DateTime(now.year, now.month, now.day, now.hour, flooredMin)
+        .subtract(const Duration(hours: 6));
+    _windowEnd = _windowStart.add(const Duration(hours: 36));
+  }
+
   @override
   void dispose() {
     _debounce?.cancel();
@@ -129,13 +137,25 @@ class _TvGuideState extends State<TvGuide> {
           ? archiveEpgUrl
           : _settings.epgUrl.trim();
       final programsByName = await fetchAllPrograms(epgUrl);
+      // The EPG fetch is also what measures the device's clock error, so
+      // re-align the window now that it is known — on a box with a bad clock
+      // the window built in initState would be off by that much.
+      _computeWindow();
       final rows = <_GuideRow>[];
       for (final c in channels) {
         // Skip channels in hidden or PIN-locked (parental) categories — the
         // Guide has no per-row unlock, so locked content stays out of it.
         if (_settings.hiddenCategories.contains(c.group)) continue;
         if (_settings.categoryPins[c.group]?.isNotEmpty ?? false) continue;
-        final progs = epgProgramsFor(programsByName, c.name);
+        // Keep only what the grid can actually show. With the extended archive
+        // the guide holds a week of past programmes per channel; without this
+        // every row would build ~150 off-screen blocks at negative offsets.
+        final progs = epgProgramsFor(programsByName, c.name)
+            .where(
+              (p) =>
+                  p.stop.isAfter(_windowStart) && p.start.isBefore(_windowEnd),
+            )
+            .toList();
         rows.add(_GuideRow(c, progs));
       }
       rows.sort((a, b) {
@@ -179,7 +199,7 @@ class _TvGuideState extends State<TvGuide> {
     _sel = 0;
     // Start each (re)build on the currently airing programme of the top row, so
     // the search path behaves the same as the initial load.
-    _col = _colByTime(_curRow, DateTime.now());
+    _col = _colByTime(_curRow, epgNow());
   }
 
   void _focusInitial() {
@@ -203,7 +223,7 @@ class _TvGuideState extends State<TvGuide> {
   DateTime _focusedTime() {
     final progs = _curRow?.programs ?? const [];
     if (_col >= 0 && _col < progs.length) return progs[_col].start;
-    return DateTime.now();
+    return epgNow();
   }
 
   void _scrollToFocused() {
@@ -282,7 +302,7 @@ class _TvGuideState extends State<TvGuide> {
   void _openFocused() {
     final row = _curRow;
     if (row == null) return;
-    final now = DateTime.now();
+    final now = epgNow();
     // Channels with no EPG (or no programme at the cursor) just play live.
     if (_col < 0 || _col >= row.programs.length) {
       _play(row.channel, null);
@@ -540,13 +560,15 @@ class _TvGuideState extends State<TvGuide> {
     var t = _windowStart;
     while (t.isBefore(_windowEnd)) {
       final left = t.difference(_windowStart).inMinutes * pxPerMin;
-      final msk = epgLocal(t.toUtc()); // show Moscow time (matches the EPG)
+      // Device-local time, so the header matches the clock on the wall and the
+      // red "now" marker lines up with the label next to it.
+      final label = epgLocal(t.toUtc());
       marks.add(
         Positioned(
           left: left,
           top: 4,
           child: Text(
-            "${msk.hour.toString().padLeft(2, '0')}:${msk.minute.toString().padLeft(2, '0')}",
+            "${label.hour.toString().padLeft(2, '0')}:${label.minute.toString().padLeft(2, '0')}",
             style: const TextStyle(color: Colors.white60, fontSize: 12),
           ),
         ),
@@ -557,7 +579,7 @@ class _TvGuideState extends State<TvGuide> {
   }
 
   Widget _nowLine() {
-    final now = DateTime.now();
+    final now = epgNow().toLocal();
     if (now.isBefore(_windowStart) || now.isAfter(_windowEnd)) {
       return const SizedBox.shrink();
     }

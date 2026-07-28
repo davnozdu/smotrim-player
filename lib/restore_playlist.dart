@@ -94,7 +94,12 @@ class _RestorePlaylistPageState extends State<RestorePlaylistPage> {
   }
 
   Widget _valueRow(String label, IconData icon, String value, VoidCallback onTap,
-      {bool autofocus = false}) {
+      {bool autofocus = false, bool obscure = false}) {
+    // The PIN is shown as bullets — it stays secret from anyone in the room,
+    // while the count still tells the user how many digits went in.
+    final shown = value.isEmpty
+        ? '—'
+        : (obscure ? '●' * value.length : value);
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: ListTile(
@@ -102,8 +107,12 @@ class _RestorePlaylistPageState extends State<RestorePlaylistPage> {
         leading: Icon(icon),
         title: Text(label, style: const TextStyle(fontSize: 13)),
         subtitle: Text(
-          value.isEmpty ? '—' : value,
-          style: const TextStyle(fontSize: 18, color: Colors.white),
+          shown,
+          style: TextStyle(
+            fontSize: 18,
+            color: Colors.white,
+            letterSpacing: obscure && value.isNotEmpty ? 4 : null,
+          ),
         ),
         trailing: const Icon(Icons.edit, size: 18),
         onTap: onTap,
@@ -152,6 +161,7 @@ class _RestorePlaylistPageState extends State<RestorePlaylistPage> {
                             Icons.password,
                             _pin,
                             _editPin,
+                            obscure: true,
                           ),
                           const SizedBox(height: 20),
                           FilledButton.icon(

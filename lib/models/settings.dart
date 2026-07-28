@@ -1,3 +1,4 @@
+import 'package:open_tv/backend/epg_timezone.dart';
 import 'package:open_tv/models/autostart_action.dart';
 import 'package:open_tv/models/media_type.dart';
 import 'package:open_tv/models/view_type.dart';
@@ -14,6 +15,10 @@ class Settings {
   String epgUrl;
   int bufferSeconds;
   bool extendedArchive;
+  // Timezone the programme guide and archive times are shown in. Auto follows
+  // the device (including its summer/winter switch); the fixed options exist
+  // for boxes shipped with the wrong region.
+  EpgTimezone epgTimezone;
   // Categories the user chose to hide (by group name).
   Set<String> hiddenCategories;
   // Parental control: group name -> 4-digit PIN.
@@ -49,6 +54,7 @@ class Settings {
     this.epgUrl = 'http://epg.one/epg.xml',
     this.bufferSeconds = 0, // 0 = Auto (adaptive buffer)
     this.extendedArchive = false, // false = 1-day (epg.one), true = 7-day (iptvx)
+    this.epgTimezone = EpgTimezone.auto,
     Set<String>? hiddenCategories,
     Map<String, String>? categoryPins,
     this.inactivityMinutes = 180, // default: 3 hours

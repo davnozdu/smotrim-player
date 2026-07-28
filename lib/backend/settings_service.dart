@@ -1,6 +1,7 @@
 import 'dart:collection';
 import 'dart:convert';
 
+import 'package:open_tv/backend/epg_timezone.dart';
 import 'package:open_tv/backend/sql.dart';
 import 'package:open_tv/models/autostart_action.dart';
 import 'package:open_tv/models/settings.dart';
@@ -17,6 +18,7 @@ const fillLogosFromEpgProp = "fillLogosFromEpg";
 const epgUrlProp = "epgUrl";
 const bufferSecondsProp = "bufferSeconds";
 const extendedArchiveProp = "extendedArchive";
+const epgTimezoneProp = "epgTimezone";
 const hiddenCategoriesProp = "hiddenCategories";
 const categoryPinsProp = "categoryPins";
 const inactivityMinutesProp = "inactivityMinutes";
@@ -46,6 +48,7 @@ class SettingsService {
     var epg = settingsMap[epgUrlProp];
     var buffer = settingsMap[bufferSecondsProp];
     var extArchive = settingsMap[extendedArchiveProp];
+    var tz = settingsMap[epgTimezoneProp];
     var hidden = settingsMap[hiddenCategoriesProp];
     var pins = settingsMap[categoryPinsProp];
     var inactivity = settingsMap[inactivityMinutesProp];
@@ -82,6 +85,10 @@ class SettingsService {
     if (extArchive != null) {
       settings.extendedArchive = int.parse(extArchive) == 1;
     }
+    settings.epgTimezone = epgTimezoneFromName(tz);
+    // Publish it so epgLocal() — called from widgets that never see Settings —
+    // formats in the chosen zone.
+    epgTimezone = settings.epgTimezone;
     if (hidden != null && hidden.isNotEmpty) {
       try {
         settings.hiddenCategories =
@@ -156,6 +163,9 @@ class SettingsService {
     settingsMap[bufferSecondsProp] = settings.bufferSeconds.toString();
     settingsMap[extendedArchiveProp] = (settings.extendedArchive ? 1 : 0)
         .toString();
+    settingsMap[epgTimezoneProp] = epgTimezoneName(settings.epgTimezone);
+    // Apply immediately: the guide and the player format through the global.
+    epgTimezone = settings.epgTimezone;
     settingsMap[hiddenCategoriesProp] =
         jsonEncode(settings.hiddenCategories.toList());
     settingsMap[categoryPinsProp] = jsonEncode(settings.categoryPins);

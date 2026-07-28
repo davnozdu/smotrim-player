@@ -82,6 +82,18 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   DateTime _lastProgress = DateTime.now();
   bool _reconnecting = false;
   int _reconnectAttempts = 0;
+  // True only when the *user* paused. The watchdog must never fight a
+  // deliberate pause, but it must still recover a stream that is stopped for
+  // any other reason (failed load, fatal decoder error, dead socket).
+  bool _userPaused = false;
+  bool _backgrounded = false;
+  // Bumped on every channel / live-archive switch. A reconnect that was already
+  // in flight when the user zapped away must not overwrite the new stream.
+  int _session = 0;
+  // How long playback may make no progress before the stream is rebuilt.
+  // Long enough to let ExoPlayer recover a normal rebuffer on a slow box,
+  // short enough that a frozen picture doesn't sit there.
+  static const _stallLimit = Duration(seconds: 12);
   int _autoBufferSec = 20;
   final List<DateTime> _rebufferTimes = [];
   final FocusNode _focusNode = FocusNode();
@@ -110,8 +122,9 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     _ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (mounted && _controlsVisible) setState(() {});
     });
-    // Watchdog: restart a stream that silently freezes (plays but position
-    // stops advancing) — covers stalls that never raise an error event.
+    // Watchdog: restart a stream that stops advancing — a silent freeze, a
+    // stream that never produced a first frame, or a player left dead after a
+    // fatal error. Covers everything that raises no further error event.
     _watchdog = Timer.periodic(const Duration(seconds: 2), (_) => _checkAlive());
     _resetInactivityTimer();
     _markActiveChannel();
@@ -164,7 +177,7 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     try {
       final guide = await fetchAllPrograms(url);
       final progs = epgProgramsFor(guide, _ch.name);
-      final now = DateTime.now().toUtc();
+      final now = epgNow();
       EpgProgram? current;
       for (final p in progs) {
         if (!p.start.isAfter(now) && p.stop.isAfter(now)) {
@@ -180,6 +193,9 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   Future<void> _zap(int delta) async {
     if (!_isLive || _playlist.length < 2 || _zapping) return;
     _zapping = true;
+    _session++; // invalidate any reconnect still in flight for the old channel
+    _userPaused = false;
+    _reconnectAttempts = 0;
     setState(() {
       _index = (_index + delta) % _playlist.length;
       if (_index < 0) _index += _playlist.length;
@@ -215,8 +231,12 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
         state == AppLifecycleState.hidden) {
       final c = _controller;
       _wasPlayingBeforeBackground = !_isMovie && (c?.isPlaying() ?? false);
+      // Stop the watchdog from "recovering" a stream we parked on purpose.
+      _backgrounded = true;
       c?.pause();
     } else if (state == AppLifecycleState.resumed) {
+      _backgrounded = false;
+      _lastProgress = DateTime.now();
       _resetInactivityTimer();
       if (_wasPlayingBeforeBackground && !exiting) {
         _wasPlayingBeforeBackground = false;
@@ -287,23 +307,38 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     if (keepWatching == true) {
       _resetInactivityTimer();
     } else {
-      _controller?.pause(); // no answer -> pause, but keep the stream/session
+      // No answer -> pause, but keep the stream/session. Counts as a
+      // deliberate pause so the watchdog doesn't restart it behind the user.
+      _userPaused = true;
+      _controller?.pause();
     }
   }
 
   void _checkAlive() {
+    if (exiting || _isMovie || _zapping || _archiveSeeking) return;
+    // Never fight a deliberate pause or a backgrounded app.
+    if (_userPaused || _backgrounded) return;
+    // Nothing has been set up yet — nothing to watch over.
+    if (_dataSource == null) return;
     final c = _controller;
-    if (c == null || exiting || _isMovie || _zapping || _archiveSeeking) return;
-    // Only act on a real freeze — never fight a user-initiated pause.
-    final playing = _isPlaying && (c.isPlaying() ?? false);
-    final pos = c.videoPlayerController?.value.position ?? Duration.zero;
-    if (!playing || pos != _lastPos) {
+    final pos = c?.videoPlayerController?.value.position ?? Duration.zero;
+    if (c != null && pos != _lastPos) {
       _lastPos = pos;
       _lastProgress = DateTime.now();
       return;
     }
-    if (DateTime.now().difference(_lastProgress) > const Duration(seconds: 5)) {
+    // No progress. Note this deliberately does NOT require isPlaying(): a
+    // player that died on a fatal error, or one whose data source failed to
+    // load at all, reports "not playing" and would otherwise stay dead
+    // forever with no further error event to react to.
+    //
+    // The limit stretches after repeated failed recoveries (12s, 24s, 36s,
+    // 48s) so a stream that is simply gone isn't rebuilt every 12 seconds all
+    // night. The first successful `play` event resets it.
+    final limit = _stallLimit * (1 + _reconnectAttempts.clamp(0, 3));
+    if (DateTime.now().difference(_lastProgress) > limit) {
       _lastProgress = DateTime.now();
+      _reconnectAttempts++;
       _reconnectNow();
     }
   }
@@ -366,7 +401,10 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   }
 
   Future<void> _setup(String url, bool live) async {
+    final session = _session;
     final headers = await Sql.getChannelHeaders(_ch.id!);
+    // The user may have zapped away while the headers were being read.
+    if (!mounted || exiting || session != _session) return;
     final hdr = <String, String>{
       if (headers?.referrer != null) "Referer": headers!.referrer!,
       if (headers?.httpOrigin != null) "Origin": headers!.httpOrigin!,
@@ -381,6 +419,7 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     );
     _dataSource = ds;
     var controller = _controller;
+    final isNew = controller == null;
     if (controller == null) {
       controller = BetterPlayerController(
         BetterPlayerConfiguration(
@@ -396,9 +435,21 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
       );
       controller.addEventsListener(_onEvent);
     }
-    await controller.setupDataSource(ds);
-    if (!mounted) {
-      controller.dispose(forceDispose: true);
+    // Each attempt restarts the stall clock, so "never produced a first frame"
+    // counts as a stall and the watchdog retries it.
+    _lastPos = Duration.zero;
+    _lastProgress = DateTime.now();
+    try {
+      await controller.setupDataSource(ds);
+    } catch (_) {
+      // Load failed outright (DNS down right after a reboot, dead host, …).
+      // Leave it to the watchdog: it retries on the same schedule as a freeze,
+      // instead of hot-looping here.
+      if (isNew) controller.dispose(forceDispose: true);
+      return;
+    }
+    if (!mounted || exiting || session != _session) {
+      if (isNew) controller.dispose(forceDispose: true);
       return;
     }
     setState(() => _controller = controller);
@@ -485,28 +536,32 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   // Archive (Flussonic catchup)
   // ---------------------------------------------------------------------------
 
-  String? _streamRoot() {
-    final base = _ch.url;
-    if (base == null) return null;
-    final q = base.indexOf('?');
-    final clean = q >= 0 ? base.substring(0, q) : base;
-    final idx = clean.lastIndexOf('/');
-    if (idx <= 0) return null;
-    return clean.substring(0, idx); // .../<channelId>
-  }
-
   // Flussonic catchup: play from <utc> and continue through the archive
   // (timeshift). index-<from>-<dur> is ignored by this provider, but
-  // index.m3u8?utc=<start>&lutc=<now> works.
+  // ?utc=<start>&lutc=<now> works.
+  //
+  // The archive URL is the channel's own live URL with those two parameters
+  // appended — nothing else is touched. Rebuilding it as "<dir>/index.m3u8"
+  // (as this did before) had two failure modes:
+  //   * any auth token in the query was dropped -> 403 on the archive;
+  //   * a playlist written as ".../<name>.m3u8" instead of
+  //     ".../<name>/index.m3u8" resolved to the parent directory, i.e. the
+  //     archive of a different stream (or nothing at all).
+  // Always built from the live URL, never from an already-built archive URL,
+  // so utc/lutc can't accumulate.
   String? _timeshiftUrl(int utc) {
-    final root = _streamRoot();
-    if (root == null) return null;
-    final now = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+    final base = _ch.url;
+    if (base == null || base.isEmpty) return null;
+    final now = epgNow().millisecondsSinceEpoch ~/ 1000;
     if (utc >= now) return null;
-    return '$root/index.m3u8?utc=$utc&lutc=$now';
+    final sep = base.contains('?') ? '&' : '?';
+    return '$base${sep}utc=$utc&lutc=$now';
   }
 
   Future<void> _playLive() async {
+    _session++;
+    _userPaused = false;
+    _reconnectAttempts = 0;
     _archiveMode = false;
     _currentProgram = null;
     _archiveStartEpoch = null;
@@ -514,24 +569,33 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   }
 
   Future<void> _playArchive(EpgProgram p) async {
+    // p.start is UTC; millisecondsSinceEpoch is the absolute instant, which is
+    // exactly what Flussonic's utc= parameter expects — independent of both the
+    // device timezone and the EPG's own (+0300) offset.
     final startEpoch = p.start.millisecondsSinceEpoch ~/ 1000;
     final url = _timeshiftUrl(startEpoch);
     if (url == null) return;
+    _session++;
+    _userPaused = false;
+    _reconnectAttempts = 0;
     _archiveMode = true;
     _currentProgram = p;
     _archiveStartEpoch = startEpoch;
     await _setup(url, true); // timeshift = live-style playlist
   }
 
-  // Loads & filters the archive programme list (runs the heavy fetch in a
-  // background isolate; the sheet shows a spinner meanwhile, video keeps playing).
+  // Loads & filters the archive programme list. Reads the shared guide cache —
+  // the same one the grid and the "now playing" marquee use — so this is a map
+  // lookup once the guide is loaded, not another EPG download per channel. The
+  // first load still runs in a background isolate; the sheet shows a spinner
+  // meanwhile and the video keeps playing.
   Future<List<EpgProgram>> _loadPrograms() async {
     final extended = widget.settings.extendedArchive;
     final url = extended ? archiveEpgUrl : widget.settings.epgUrl.trim();
     if (url.isEmpty) return [];
     final all = _programs ?? await fetchPrograms(url, _ch.name);
     _programs = all;
-    final now = DateTime.now().toUtc();
+    final now = epgNow();
     final from = now.subtract(Duration(days: extended ? 7 : 2));
     return all
         .where((p) => p.start.isAfter(from) && p.start.isBefore(now))
@@ -560,14 +624,14 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     );
   }
 
-  // Formats a UTC programme time in the EPG (Moscow) timezone.
+  // Formats a UTC programme time in the device's local timezone.
   String _stamp(DateTime utc) {
     final d = epgLocal(utc);
     String two(int v) => v.toString().padLeft(2, '0');
     return "${two(d.day)}.${two(d.month)} ${two(d.hour)}:${two(d.minute)}";
   }
 
-  // HH:mm in the EPG (Moscow) timezone.
+  // HH:mm in the device's local timezone.
   String _hhmm(DateTime utc) {
     final d = epgLocal(utc);
     String two(int v) => v.toString().padLeft(2, '0');
@@ -653,8 +717,11 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     final c = _controller;
     if (c == null) return;
     if (c.isPlaying() ?? false) {
+      _userPaused = true; // deliberate pause — the watchdog must leave it alone
       c.pause();
     } else {
+      _userPaused = false;
+      _lastProgress = DateTime.now();
       c.play();
     }
   }
@@ -683,7 +750,7 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     _archiveSeeking = true;
     try {
       final cur = base + _position.inSeconds;
-      final now = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+      final now = epgNow().millisecondsSinceEpoch ~/ 1000;
       var target = cur + seconds;
       if (target > now - 3) target = now - 3; // don't cross the live edge
       if (target < 0) target = 0;
@@ -1018,7 +1085,7 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
       // Programme progress bar (start → end of the current show), so it's clear
       // how much time is left until it ends.
       if (p != null && p.stop.isAfter(p.start)) {
-        final now = DateTime.now().toUtc();
+        final now = epgNow();
         final totalSec = p.stop.difference(p.start).inSeconds;
         final elapsedSec = now.difference(p.start).inSeconds.clamp(0, totalSec);
         final value = (elapsedSec / totalSec).clamp(0.0, 1.0).toDouble();

@@ -213,6 +213,21 @@ class Sql {
     return rows.map(rowToChannel).toList();
   }
 
+  // Names of every livestream in the enabled sources. Used to narrow the EPG
+  // parse to the channels the user actually has (the feeds carry thousands).
+  static Future<List<String>> getLivestreamNames() async {
+    var db = await DbFactory.db;
+    var rows = await db.getAll('''
+        SELECT DISTINCT c.name
+        FROM channels c
+        JOIN sources s ON s.id = c.source_id
+        WHERE s.enabled = 1
+          AND c.media_type = ${MediaType.livestream.index}
+          AND c.name IS NOT NULL
+    ''');
+    return rows.map((r) => r.columnAt(0) as String).toList();
+  }
+
   static Channel rowToChannel(Row row) {
     return Channel(
       id: row.columnAt(0),

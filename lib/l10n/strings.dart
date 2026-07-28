@@ -131,6 +131,31 @@ class S {
     'Больше истории через iptvx.one — первое открытие дольше (по умолчанию 1 день)',
     'Більше історії через iptvx.one — перше відкриття довше (за замовчуванням 1 день)',
   );
+  String get epgTimezone => _t(
+    'Guide timezone',
+    'Часовой пояс программы',
+    'Часовий пояс програми',
+  );
+  String get epgTimezoneAuto =>
+      _t('Device timezone', 'Как на приставке', 'Як на приставці');
+  String get epgTimezoneCentralEurope => _t(
+    'Central Europe (CET/CEST)',
+    'Центральная Европа (CET/CEST)',
+    'Центральна Європа (CET/CEST)',
+  );
+  String get epgTimezoneMoscow =>
+      _t('Moscow (UTC+3)', 'Москва (UTC+3)', 'Москва (UTC+3)');
+  String epgTimezoneDetected(String zone, String offset) => _t(
+    'Detected: $zone, $offset',
+    'Определён: $zone, $offset',
+    'Визначено: $zone, $offset',
+  );
+  String clockOff(String amount) => _t(
+    'Device clock is off by $amount — corrected automatically',
+    'Часы приставки сбиты на $amount — исправляется автоматически',
+    'Годинник приставки збитий на $amount — виправляється автоматично',
+  );
+
   String get fillLogos =>
       _t('Fill logos from EPG', 'Логотипы из EPG', 'Логотипи з EPG');
   String get fillLogosSub => _t(

@@ -39,6 +39,22 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(installed)
                     }
+                    "timeZoneInfo" -> {
+                        // The IANA id ("Europe/Prague") the box is configured
+                        // with, plus the offset in force right now. Dart only
+                        // exposes the abbreviation, and the id is what makes a
+                        // misconfigured box obvious in Settings.
+                        val tz = java.util.TimeZone.getDefault()
+                        val now = System.currentTimeMillis()
+                        result.success(
+                            mapOf(
+                                "id" to tz.id,
+                                "offsetMinutes" to tz.getOffset(now) / 60000,
+                                "dst" to tz.inDaylightTime(java.util.Date(now)),
+                                "country" to resources.configuration.locales[0].country
+                            )
+                        )
+                    }
                     "setKeepScreenOn" -> {
                         val on = call.argument<Boolean>("on") ?: false
                         runOnUiThread {

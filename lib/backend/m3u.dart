@@ -86,6 +86,10 @@ Future<void> processM3U(Source source, bool wipe, [String? path]) async {
     statements.add(Sql.restorePreserve(preserve));
   }
   await Sql.commitWrite(statements);
+  // The channel list decides which channels the EPG is parsed for. Restoring a
+  // playlist goes straight through here (not via Utils.processSource), so drop
+  // the cached scope here too or the new channels get no programme data.
+  invalidateEpgScope();
 }
 
 void commitChannel(

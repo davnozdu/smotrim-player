@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:open_tv/backend/epg.dart';
+import 'package:open_tv/backend/epg_timezone.dart';
 import 'package:open_tv/backend/identity_service.dart';
 import 'package:open_tv/backend/settings_service.dart';
 import 'package:open_tv/backend/sql.dart';
@@ -43,6 +45,7 @@ class _SettingsState extends State<SettingsView> {
   Settings settings = Settings();
   List<Source> sources = [];
   bool loading = true;
+  TimeZoneInfo? _tz;
   @override
   void initState() {
     super.initState();
@@ -54,11 +57,70 @@ class _SettingsState extends State<SettingsView> {
       SettingsService.getSettings(),
       Sql.getSources(),
     ]);
+    final tz = await LaunchBridge.timeZoneInfo();
+    if (!mounted) return;
     setState(() {
       settings = results[0] as Settings;
       sources = results[1] as List<Source>;
+      _tz = tz;
       loading = false;
     });
+  }
+
+  String _timezoneLabel(S s, EpgTimezone tz) {
+    switch (tz) {
+      case EpgTimezone.auto:
+        return s.epgTimezoneAuto;
+      case EpgTimezone.centralEurope:
+        return s.epgTimezoneCentralEurope;
+      case EpgTimezone.moscow:
+        return s.epgTimezoneMoscow;
+    }
+  }
+
+  // Under the setting: what the device actually reports, and — when the box's
+  // clock turned out to be wrong — by how much it is being corrected. Both are
+  // the things support needs to see when "the guide shows the wrong time".
+  String _timezoneSubtitle(S s) {
+    final parts = <String>[_timezoneLabel(s, settings.epgTimezone)];
+    final tz = _tz;
+    if (tz != null && tz.id.isNotEmpty) {
+      parts.add(s.epgTimezoneDetected(tz.id, tz.offsetLabel));
+    }
+    final skew = epgClockSkew;
+    if (skew.abs() > const Duration(minutes: 1)) {
+      parts.add(s.clockOff(s.minutesLabel(skew.inMinutes.abs())));
+    }
+    return parts.join(' · ');
+  }
+
+  Future<void> _showTimezoneDialog(BuildContext context) async {
+    final loc = S.of(context);
+    final options = EpgTimezone.values;
+    await showDialog(
+      barrierDismissible: true,
+      context: context,
+      builder: (BuildContext ctx) {
+        return SelectDialog(
+          title: loc.epgTimezone,
+          data: options
+              .map(
+                (tz) => IdData(
+                  id: tz.index,
+                  data: _timezoneLabel(loc, tz),
+                ),
+              )
+              .toList(),
+          action: (index) {
+            setState(() {
+              settings.epgTimezone = options[index];
+              updateSettings();
+            });
+            Navigator.of(ctx).pop();
+          },
+        );
+      },
+    );
   }
 
   void updateView(ViewType view) {
@@ -649,6 +711,11 @@ class _SettingsState extends State<SettingsView> {
                         ),
                       ],
                     ),
+                  ),
+                  ListTile(
+                    title: Text(s.epgTimezone),
+                    subtitle: Text(_timezoneSubtitle(s)),
+                    onTap: () async => await _showTimezoneDialog(context),
                   ),
                   ListTile(
                     title: Text(s.refreshOnStart),

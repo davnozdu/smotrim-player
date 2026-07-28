@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:open_tv/backend/epg_timezone.dart';
+import 'package:open_tv/backend/sql.dart';
 import 'package:open_tv/memory.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -11,10 +14,56 @@ import 'package:path_provider/path_provider.dart';
 /// on demand when opening the archive menu.
 const archiveEpgUrl = 'https://iptvx.one/epg/epg_lite.xml.gz';
 
-/// EPG/broadcast timezone (Moscow, no DST). Programme times are shown in this
-/// zone so they match the actual Russian TV schedule regardless of device tz.
-const epgDisplayOffset = Duration(hours: 3);
-DateTime epgLocal(DateTime utc) => utc.toUtc().add(epgDisplayOffset);
+/// Programme times are shown in the viewer's timezone (by default the one the
+/// device is set to), so the guide and the archive match the clock on the wall.
+///
+/// XMLTV timestamps carry an explicit UTC offset (both epg.one and iptvx.one
+/// emit `+0300`), so the absolute instant is already exact after parsing — only
+/// the presentation is converted here. Everything the player sends upstream
+/// (the Flussonic `utc=` archive anchor) stays in real UTC seconds.
+///
+/// Note this applies no clock correction: a programme's start is already an
+/// exact instant, and the device's timezone is a separate setting from its
+/// (possibly wrong) clock. Only "now" needs correcting — see [epgNow].
+DateTime epgLocal(DateTime utc) => epgToDisplay(utc);
+
+// Offset between the EPG server's clock and this device's clock. TV boxes are
+// the classic offender here: no RTC battery, no NTP until the network is up, so
+// they can boot minutes (or hours) off. A wrong clock picks the wrong "now"
+// programme and anchors the archive at the wrong moment, so the skew measured
+// from the EPG response is folded into every "now" decision.
+Duration _clockSkew = Duration.zero;
+
+/// How far the device clock is off, as last measured against the EPG server.
+Duration get epgClockSkew => _clockSkew;
+
+/// "Now" in UTC, corrected for a wrong device clock. Everything that decides
+/// which programme is on air — and where the archive's live edge is — uses
+/// this instead of `DateTime.now()`.
+DateTime epgNow() => DateTime.now().toUtc().add(_clockSkew);
+
+// Anything under a minute is request latency and whole-second HTTP dates, not
+// a clock problem worth correcting.
+const _skewThreshold = Duration(minutes: 1);
+bool _skewProbed = false;
+
+// Measures the clock error from a HEAD request's Date header. Only used when
+// the guide came from disk and no download happened to measure it. Runs once
+// per app start.
+Future<void> _probeClockSkew(String url) async {
+  if (_skewProbed) return;
+  _skewProbed = true;
+  try {
+    final resp = await http
+        .head(Uri.parse(url))
+        .timeout(const Duration(seconds: 8));
+    final date = resp.headers['date'];
+    if (date == null) return;
+    final skew =
+        HttpDate.parse(date).toUtc().difference(DateTime.now().toUtc());
+    if (skew.abs() > _skewThreshold) _clockSkew = skew;
+  } catch (_) {}
+}
 
 final _channelBlockRegex = RegExp(
   r'<channel\b[^>]*>(.*?)</channel>',
@@ -120,15 +169,67 @@ const _guideMaxUrls = 2;
 // In-flight parse, so the catalog and the guide asking at the same time share
 // a single download/parse instead of triggering two.
 Future<Map<String, List<EpgProgram>>>? _guideInflight;
-String? _guideInflightUrl;
+String? _guideInflightKey;
 const _guideMemTtl = Duration(minutes: 45);
 const _guideDiskTtl = Duration(hours: 6);
 
-// Stores a freshly built guide, evicting the least-recently-stored URL so the
+/// How far back a guide keeps programmes. The archive EPG carries 8 days of
+/// past schedule and is the source for the 7-day archive list, so it is parsed
+/// with a wide past window; epg.one only ever carries ~1 day.
+///
+/// Deriving the window from the URL (instead of passing it per call) keeps the
+/// whole app on ONE parsed guide per source: the grid, the "now playing"
+/// marquee and every channel's archive list all read the same cache entry, so
+/// the EPG is downloaded and parsed once instead of once per screen.
+Duration _pastWindowFor(String url) =>
+    url == archiveEpgUrl ? const Duration(days: 8) : const Duration(hours: 30);
+
+// Channels the user actually has. The EPG carries ~4000 channels and 1.4M
+// programmes; a playlist has a few hundred. Dropping everything else inside the
+// parse isolate is what makes a week-deep guide affordable on a TV box — both
+// in parse time and in the memory the result occupies.
+Set<String>? _scopeNames;
+String _scopeKey = 'all';
+
+/// Forgets the channel scope (and every guide parsed with it). Call after a
+/// playlist is imported or refreshed, so new channels get EPG right away.
+void invalidateEpgScope() {
+  _scopeNames = null;
+  _scopeKey = 'all';
+  _guideByUrl.clear();
+  _guideAtByUrl.clear();
+}
+
+Future<Set<String>> _epgScope() async {
+  final cached = _scopeNames;
+  if (cached != null) return cached;
+  var names = <String>{};
+  try {
+    for (final n in await Sql.getLivestreamNames()) {
+      final exact = normalizeChannelNameLoose(n);
+      if (exact.isNotEmpty) names.add(exact);
+      // Keep the HD->base fallback key too, so an HD channel still matches an
+      // EPG that only lists the SD schedule.
+      final base = normalizeChannelNameLoose(
+        n.replaceAll(_qualityStripRegex, ' '),
+      );
+      if (base.isNotEmpty) names.add(base);
+    }
+  } catch (_) {
+    names = <String>{}; // empty = no filtering (safe fallback)
+  }
+  _scopeNames = names;
+  _scopeKey = names.isEmpty
+      ? 'all'
+      : '${names.length}.${names.fold<int>(0, (a, b) => a ^ b.hashCode)}';
+  return names;
+}
+
+// Stores a freshly built guide, evicting the least-recently-stored entry so the
 // memory cache never holds more than [_guideMaxUrls] sources.
-void _storeGuide(String url, Map<String, List<EpgProgram>> guide) {
-  _guideByUrl[url] = guide;
-  _guideAtByUrl[url] = DateTime.now();
+void _storeGuide(String key, Map<String, List<EpgProgram>> guide) {
+  _guideByUrl[key] = guide;
+  _guideAtByUrl[key] = DateTime.now();
   if (_guideByUrl.length > _guideMaxUrls) {
     final oldest = _guideAtByUrl.entries
         .reduce((a, b) => a.value.isBefore(b.value) ? a : b)
@@ -138,54 +239,80 @@ void _storeGuide(String url, Map<String, List<EpgProgram>> guide) {
   }
 }
 
-Future<File> _guideCacheFile(String url) async {
+Future<File> _guideCacheFile(String key) async {
   final dir = await getTemporaryDirectory();
-  return File('${dir.path}/epg_guide_${url.hashCode}.json');
+  return File('${dir.path}/epg_guide_${key.hashCode}.json');
 }
 
 /// Returns programmes for every channel (normalized name -> programmes in a
-/// window around now), for the TV guide grid and the catalog "now playing".
-/// Memory cache -> disk cache -> background parse (in that order).
+/// window around now), for the TV guide grid, the catalog "now playing" and the
+/// player's archive list. Memory cache -> disk cache -> background parse.
 Future<Map<String, List<EpgProgram>>> fetchAllPrograms(String epgUrl) async {
   final url = epgUrl.trim();
   if (url.isEmpty) return {};
+  final scope = await _epgScope();
+  // No livestreams yet (fresh install, or a movies-only playlist): there is
+  // nothing to show a guide for, and parsing the whole feed unfiltered is
+  // exactly the work this scope exists to avoid.
+  if (scope.isEmpty) return {};
+  // The scope is part of the key: after the playlist changes, a guide parsed
+  // for the old channel set must not be served.
+  final key = '$url|$_scopeKey';
   // 1) Fresh in-memory result for this exact source.
-  final cached = _guideByUrl[url];
-  final cachedAt = _guideAtByUrl[url];
+  final cached = _guideByUrl[key];
+  final cachedAt = _guideAtByUrl[key];
   if (cached != null &&
       cachedAt != null &&
       DateTime.now().difference(cachedAt) < _guideMemTtl) {
     return cached;
   }
   // Coalesce concurrent requests for the same source.
-  if (_guideInflight != null && _guideInflightUrl == url) {
+  if (_guideInflight != null && _guideInflightKey == key) {
     return _guideInflight!;
   }
-  final future = _loadGuide(url);
+  final future = _loadGuide(url, key, scope);
   _guideInflight = future;
-  _guideInflightUrl = url;
+  _guideInflightKey = key;
   try {
     return await future;
   } finally {
     if (identical(_guideInflight, future)) {
       _guideInflight = null;
-      _guideInflightUrl = null;
+      _guideInflightKey = null;
     }
   }
 }
 
-Future<Map<String, List<EpgProgram>>> _loadGuide(String url) async {
+Future<Map<String, List<EpgProgram>>> _loadGuide(
+  String url,
+  String key,
+  Set<String> scope,
+) async {
   // 2) Recent on-disk copy (decoded in a background isolate).
-  final fromDisk = await _readGuideDisk(url);
+  final fromDisk = await _readGuideDisk(key);
   if (fromDisk != null) {
-    _storeGuide(url, fromDisk);
+    _storeGuide(key, fromDisk);
+    // Serving from disk skips the download that normally measures the clock —
+    // and a box that just booted with a wrong clock is exactly the case where
+    // the cache is freshest. Probe separately, without blocking the guide.
+    unawaited(_probeClockSkew(url));
     return fromDisk;
   }
   // 3) Download + parse + persist — all inside the isolate.
-  final cachePath = (await _guideCacheFile(url)).path;
-  final data = await compute(_parseAllPrograms, {'url': url, 'cache': cachePath});
+  final cachePath = (await _guideCacheFile(key)).path;
+  final data = await compute(_parseAllPrograms, {
+    'url': url,
+    'cache': cachePath,
+    'pastHours': _pastWindowFor(url).inHours,
+    'names': scope.toList(),
+  });
+  // Only a fresh response carries a server clock to compare against; a guide
+  // restored from disk leaves the last measured skew alone.
+  final skew = Duration(milliseconds: (data['skew'] as int?) ?? 0);
+  _clockSkew = skew.abs() > _skewThreshold ? skew : Duration.zero;
+  _skewProbed = true;
   final result = _buildGuide(data);
-  _storeGuide(url, result);
+  _storeGuide(key, result);
   return result;
 }
 
@@ -252,9 +379,9 @@ String? epgNowTitleFor(Map<String, String> nowMap, String channelName) {
 }
 
 // Reads & decodes the on-disk guide in a background isolate (if fresh enough).
-Future<Map<String, List<EpgProgram>>?> _readGuideDisk(String url) async {
+Future<Map<String, List<EpgProgram>>?> _readGuideDisk(String key) async {
   try {
-    final f = await _guideCacheFile(url);
+    final f = await _guideCacheFile(key);
     if (!await f.exists()) return null;
     if (DateTime.now().difference(await f.lastModified()) > _guideDiskTtl) {
       return null;
@@ -277,23 +404,45 @@ Map<String, dynamic>? _decodeGuideFile(String path) {
   }
 }
 
-// Isolate: parse all channels' programmes in [now-6h, now+30h] and cache to disk.
-Future<Map<String, dynamic>> _parseAllPrograms(Map<String, String> args) async {
-  final epgUrl = args['url']!;
-  final cachePath = args['cache'];
+// Isolate: parse programmes for the user's channels in
+// [now-pastHours, now+36h] and cache the result to disk.
+//
+// Only channels present in `names` are kept — on a typical playlist that skips
+// ~90% of the feed, which is what keeps a week-deep archive parse affordable on
+// a TV box. An empty `names` means "no playlist known yet": keep everything so
+// the guide still works instead of coming back blank.
+Future<Map<String, dynamic>> _parseAllPrograms(Map<String, dynamic> args) async {
+  final epgUrl = args['url'] as String;
+  final cachePath = args['cache'] as String?;
+  final pastHours = (args['pastHours'] as int?) ?? 6;
+  final scope = ((args['names'] as List?) ?? const []).cast<String>().toSet();
   final client = http.Client();
   try {
     final response = await client.send(http.Request('GET', Uri.parse(epgUrl)));
     if (response.statusCode != 200) {
       throw Exception('Failed to download EPG: ${response.statusCode}');
     }
+    // How far this device's clock is off, measured against the server's. Used
+    // to pick the right "now" programme even on a box with a bad clock.
+    var skewMs = 0;
+    final serverDate = response.headers['date'];
+    if (serverDate != null) {
+      try {
+        skewMs = HttpDate.parse(serverDate)
+            .toUtc()
+            .difference(DateTime.now().toUtc())
+            .inMilliseconds;
+      } catch (_) {}
+    }
     Stream<List<int>> bytes = response.stream;
     if (epgUrl.endsWith('.gz')) {
       bytes = bytes.transform(gzip.decoder);
     }
-    final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
-    final lower = nowMs - 6 * 3600 * 1000;
-    final upper = nowMs + 30 * 3600 * 1000;
+    // The window is centred on corrected "now", so a wrong clock can't shift
+    // the retained programmes out from under the guide.
+    final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch + skewMs;
+    final lower = nowMs - pastHours * 3600 * 1000;
+    final upper = nowMs + 36 * 3600 * 1000;
     final idNames = <String, List<String>>{};
     final idProgs = <String, List<Map<String, dynamic>>>{};
     final current = StringBuffer();
@@ -311,7 +460,9 @@ Future<Map<String, dynamic>> _parseAllPrograms(Map<String, String> args) async {
             final k = normalizeChannelNameLoose(
               (dn.group(1) ?? '').replaceAll(_tagRegex, ''),
             );
-            if (k.isNotEmpty) names.add(k);
+            if (k.isEmpty) continue;
+            if (scope.isNotEmpty && !scope.contains(k)) continue;
+            names.add(k);
           }
           if (names.isNotEmpty) idNames[id] = names;
         }
@@ -319,6 +470,7 @@ Future<Map<String, dynamic>> _parseAllPrograms(Map<String, String> args) async {
         final block = current.toString();
         current.clear();
         final ch = _progChannelRegex.firstMatch(block)?.group(1);
+        // Not one of the user's channels — skip before any further regex work.
         if (ch == null || !idNames.containsKey(ch)) continue;
         final sm = _progStartRegex.firstMatch(block);
         final em = _progStopRegex.firstMatch(block);
@@ -334,13 +486,16 @@ Future<Map<String, dynamic>> _parseAllPrograms(Map<String, String> args) async {
         (idProgs[ch] ??= []).add({'s': sMs, 'e': eMs, 't': _unescapeXml(title)});
       }
     }
-    final out = {'names': idNames, 'progs': idProgs};
+    final out = <String, dynamic>{'names': idNames, 'progs': idProgs};
     // Persist for fast cold starts (best-effort, still inside the isolate).
+    // The skew is deliberately not persisted — it is only valid for a live
+    // response, and a stale one would be worse than none.
     if (cachePath != null) {
       try {
         File(cachePath).writeAsStringSync(jsonEncode(out));
       } catch (_) {}
     }
+    out['skew'] = skewMs;
     return out;
   } finally {
     client.close();
@@ -364,7 +519,7 @@ Future<void> refreshNowPlaying(String epgUrl) async {
 
 // Picks the currently-airing title per channel from the parsed guide.
 Map<String, String> _deriveNowPlaying(Map<String, List<EpgProgram>> guide) {
-  final now = DateTime.now().toUtc();
+  final now = epgNow();
   final out = <String, String>{};
   guide.forEach((name, programs) {
     for (final p in programs) {
@@ -391,56 +546,18 @@ final _progStartRegex = RegExp(r'start="(\d{14})\s*([+\-]\d{4})?"');
 final _progStopRegex = RegExp(r'stop="(\d{14})\s*([+\-]\d{4})?"');
 final _titleRegex = RegExp(r'<title[^>]*>(.*?)</title>', dotAll: true);
 
-// Per-channel programme cache (short TTL — schedules change slowly). Capped so
-// it can't grow unbounded as the user opens many channels' archives.
-final Map<String, List<EpgProgram>> _programCache = {};
-final Map<String, DateTime> _programCacheAt = {};
-const _programCacheMax = 40;
-
-void _capProgramCache() {
-  if (_programCache.length <= _programCacheMax) return;
-  final keys = _programCacheAt.keys.toList()
-    ..sort((a, b) => _programCacheAt[a]!.compareTo(_programCacheAt[b]!));
-  final toRemove = _programCache.length - _programCacheMax;
-  for (var i = 0; i < toRemove && i < keys.length; i++) {
-    _programCache.remove(keys[i]);
-    _programCacheAt.remove(keys[i]);
-  }
-}
-
-/// Returns programmes for the channel matching [channelName]. The heavy
-/// download + gzip + parse runs in a background isolate (UI stays responsive),
-/// with an in-memory and on-disk cache for fast subsequent opens.
+/// Programmes for one channel, taken from the shared guide cache.
+///
+/// The guide is downloaded and parsed once per source (see [fetchAllPrograms]),
+/// so opening the archive on a second channel costs a map lookup instead of
+/// another EPG download — that used to be a full re-download and re-parse of
+/// the feed for every channel the user opened.
 Future<List<EpgProgram>> fetchPrograms(
   String epgUrl,
   String channelName,
 ) async {
-  final target = normalizeChannelNameLoose(channelName);
-  if (target.isEmpty) return [];
-  final cacheKey = "$epgUrl|$target";
-  final cachedAt = _programCacheAt[cacheKey];
-  if (_programCache.containsKey(cacheKey) &&
-      cachedAt != null &&
-      DateTime.now().difference(cachedAt) < const Duration(minutes: 10)) {
-    return _programCache[cacheKey]!;
-  }
-  final fromDisk = await _readProgramDisk(cacheKey);
-  if (fromDisk != null) {
-    _programCache[cacheKey] = fromDisk;
-    _programCacheAt[cacheKey] = DateTime.now();
-    _capProgramCache();
-    return fromDisk;
-  }
-  final raw = await compute(_downloadAndParsePrograms, {
-    'url': epgUrl,
-    'target': target,
-  });
-  final programs = raw.map(_programFromMap).toList();
-  _programCache[cacheKey] = programs;
-  _programCacheAt[cacheKey] = DateTime.now();
-  _capProgramCache();
-  await _writeProgramDisk(cacheKey, raw);
-  return programs;
+  final guide = await fetchAllPrograms(epgUrl);
+  return epgProgramsFor(guide, channelName);
 }
 
 EpgProgram _programFromMap(Map<String, dynamic> m) => EpgProgram(
@@ -448,100 +565,6 @@ EpgProgram _programFromMap(Map<String, dynamic> m) => EpgProgram(
   DateTime.fromMillisecondsSinceEpoch(m['e'] as int, isUtc: true),
   m['t'] as String,
 );
-
-// Runs in a background isolate (via compute). Returns serializable maps.
-Future<List<Map<String, dynamic>>> _downloadAndParsePrograms(
-  Map<String, String> args,
-) async {
-  final epgUrl = args['url']!;
-  final target = args['target']!;
-  final client = http.Client();
-  try {
-    final response = await client.send(http.Request('GET', Uri.parse(epgUrl)));
-    if (response.statusCode != 200) {
-      throw Exception('Failed to download EPG: ${response.statusCode}');
-    }
-    Stream<List<int>> bytes = response.stream;
-    if (epgUrl.endsWith('.gz')) {
-      bytes = bytes.transform(gzip.decoder);
-    }
-    final ids = <String>{};
-    final out = <Map<String, dynamic>>[];
-    final current = StringBuffer();
-    await for (final line in bytes
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())) {
-      current.writeln(line);
-      if (line.contains('</channel>')) {
-        final block = current.toString();
-        current.clear();
-        final id = _channelIdRegex.firstMatch(block)?.group(1);
-        if (id != null) {
-          for (final dn in _displayNameRegex.allMatches(block)) {
-            if (normalizeChannelNameLoose(
-                  (dn.group(1) ?? '').replaceAll(_tagRegex, ''),
-                ) ==
-                target) {
-              ids.add(id);
-              break;
-            }
-          }
-        }
-      } else if (line.contains('</programme>')) {
-        final block = current.toString();
-        current.clear();
-        if (ids.isEmpty) continue;
-        final ch = _progChannelRegex.firstMatch(block)?.group(1);
-        if (ch == null || !ids.contains(ch)) continue;
-        final sm = _progStartRegex.firstMatch(block);
-        final em = _progStopRegex.firstMatch(block);
-        if (sm == null || em == null) continue;
-        final start = _parseXmltvTime(sm.group(1)!, sm.group(2));
-        final stop = _parseXmltvTime(em.group(1)!, em.group(2));
-        final title = (_titleRegex.firstMatch(block)?.group(1) ?? '')
-            .replaceAll(_tagRegex, '')
-            .trim();
-        out.add({
-          's': start.millisecondsSinceEpoch,
-          'e': stop.millisecondsSinceEpoch,
-          't': _unescapeXml(title),
-        });
-      }
-    }
-    return out;
-  } finally {
-    client.close();
-  }
-}
-
-Future<File> _programCacheFile(String key) async {
-  final dir = await getTemporaryDirectory();
-  return File('${dir.path}/epg_prog_${key.hashCode}.json');
-}
-
-Future<List<EpgProgram>?> _readProgramDisk(String key) async {
-  try {
-    final f = await _programCacheFile(key);
-    if (!await f.exists()) return null;
-    if (DateTime.now().difference(await f.lastModified()) >
-        const Duration(hours: 6)) {
-      return null;
-    }
-    final data = jsonDecode(await f.readAsString()) as List;
-    return data
-        .map((m) => _programFromMap(Map<String, dynamic>.from(m as Map)))
-        .toList();
-  } catch (_) {
-    return null;
-  }
-}
-
-Future<void> _writeProgramDisk(String key, List<Map<String, dynamic>> raw) async {
-  try {
-    final f = await _programCacheFile(key);
-    await f.writeAsString(jsonEncode(raw));
-  } catch (_) {}
-}
 
 DateTime _parseXmltvTime(String digits, String? tz) {
   var dt = DateTime.utc(

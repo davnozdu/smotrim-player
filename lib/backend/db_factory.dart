@@ -141,8 +141,22 @@ class DbFactory {
     return db;
   }
 
+  // `_db ??= await _createDB()` would let two concurrent callers (e.g. the
+  // catalog and the EPG refresh on startup) both see null and open the database
+  // — and run the migrations — twice. Share the in-flight open instead.
+  static Future<SqliteDatabase>? _opening;
+
   static Future<SqliteDatabase> get db async {
-    _db ??= await _createDB();
-    return _db!;
+    final existing = _db;
+    if (existing != null) return existing;
+    final opening = _opening ??= _createDB();
+    try {
+      return _db ??= await opening;
+    } catch (_) {
+      // Clear the failed attempt so the next caller can try again, the way the
+      // old `??= await` did.
+      if (identical(_opening, opening)) _opening = null;
+      rethrow;
+    }
   }
 }
