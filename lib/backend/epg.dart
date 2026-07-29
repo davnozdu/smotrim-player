@@ -216,6 +216,14 @@ Duration _pastWindowFor(String url) =>
 Set<String>? _scopeNames;
 String _scopeKey = 'all';
 
+/// Drops the parsed guide from RAM. The on-disk copy stays, so reopening the
+/// guide is still fast — this only hands memory back to the system when
+/// Android says it is short, typically mid-way through a long viewing session.
+void clearEpgMemoryCache() {
+  _guideByUrl.clear();
+  _guideAtByUrl.clear();
+}
+
 /// Forgets the channel scope (and every guide parsed with it). Call after a
 /// playlist is imported or refreshed, so new channels get EPG right away.
 void invalidateEpgScope() {
@@ -272,7 +280,15 @@ Future<File> _guideCacheFile(String key) async {
 /// Returns programmes for every channel (normalized name -> programmes in a
 /// window around now), for the TV guide grid, the catalog "now playing" and the
 /// player's archive list. Memory cache -> disk cache -> background parse.
-Future<Map<String, List<EpgProgram>>> fetchAllPrograms(String epgUrl) async {
+///
+/// Pass [cachedOnly] when the caller cannot afford the heavy path — during
+/// playback a download+parse competes with the video for RAM on a 2 GB box.
+/// It then serves whatever is already in memory (even if past its TTL) and
+/// never starts a download.
+Future<Map<String, List<EpgProgram>>> fetchAllPrograms(
+  String epgUrl, {
+  bool cachedOnly = false,
+}) async {
   final url = epgUrl.trim();
   if (url.isEmpty) return {};
   final scope = await _epgScope();
@@ -291,6 +307,10 @@ Future<Map<String, List<EpgProgram>>> fetchAllPrograms(String epgUrl) async {
       DateTime.now().difference(cachedAt) < _guideMemTtl) {
     return cached;
   }
+  // Stale, or nothing at all — but the caller asked not to pay for a reload.
+  // A guide an hour past its TTL is still the right answer for "what is on
+  // now": programme boundaries move slowly.
+  if (cachedOnly) return cached ?? {};
   // Coalesce concurrent requests for the same source.
   if (_guideInflight != null && _guideInflightKey == key) {
     return _guideInflight!;

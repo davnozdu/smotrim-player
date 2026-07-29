@@ -97,10 +97,17 @@ class _HomeState extends State<Home> {
       final epgUrl = s.extendedArchive ? archiveEpgUrl : s.epgUrl;
       refreshNowPlaying(epgUrl);
       _nowPlayingTimer?.cancel();
-      _nowPlayingTimer = Timer.periodic(
-        const Duration(minutes: 1),
-        (_) => refreshNowPlaying(epgUrl),
-      );
+      _nowPlayingTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+        // This screen stays alive in the navigation stack while the player sits
+        // on top of it, and the timer is only cancelled in dispose(). Without
+        // this check the refresh keeps ticking through the whole viewing
+        // session — and once the guide cache expires it would kick off a full
+        // EPG download and parse in the middle of someone's film.
+        if (!mounted) return;
+        final route = ModalRoute.of(context);
+        if (route != null && !route.isCurrent) return;
+        refreshNowPlaying(epgUrl);
+      });
     });
     if (widget.refresh) {
       Error.tryAsyncNoLoading(

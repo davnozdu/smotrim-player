@@ -129,7 +129,17 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     _resetInactivityTimer();
     _markActiveChannel();
     _ensurePlaylist();
-    _loadLiveProgram();
+    // The one full load of the session, before playback has settled.
+    _loadLiveProgram(cachedOnly: false);
+  }
+
+  // Android is short on memory — typically an hour into a session on a 2 GB
+  // box. Hand the parsed guide back rather than let the system push out the
+  // video buffers (or kill something else). The disk copy stays, so reopening
+  // the guide is still quick.
+  @override
+  void didHaveMemoryPressure() {
+    clearEpgMemoryCache();
   }
 
   // Remembers the channel currently being watched so "Resume playback" can
@@ -165,9 +175,14 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  // Loads the currently-airing programme title for the live channel (uses the
-  // shared, cached guide — no extra download). Shown in the top marquee.
-  Future<void> _loadLiveProgram() async {
+  // Loads the currently-airing programme title for the live channel. Shown in
+  // the top marquee.
+  //
+  // [cachedOnly] keeps this off the heavy path once the video is running: a
+  // guide reload competes with playback for memory, and on a 2 GB box that is
+  // what turns a long viewing session into a stutter. The full load runs once,
+  // when the player opens; every later refresh reads what is already in RAM.
+  Future<void> _loadLiveProgram({bool cachedOnly = true}) async {
     if (!_isLive || _archiveMode) return;
     // Use the same EPG source as the Guide so the live programme always matches.
     final url = widget.settings.extendedArchive
@@ -175,7 +190,7 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
         : widget.settings.epgUrl.trim();
     if (url.isEmpty) return;
     try {
-      final guide = await fetchAllPrograms(url);
+      final guide = await fetchAllPrograms(url, cachedOnly: cachedOnly);
       final progs = epgProgramsFor(guide, _ch.name);
       final now = epgNow();
       EpgProgram? current;
