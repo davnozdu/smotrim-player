@@ -26,6 +26,10 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: the toolchain every release so far was built with. Plain
+          # "stable" moved to 3.47, which demands Gradle 8.14+ and broke the
+          # build with no change in the app. Bump deliberately, with a test build.
+          flutter-version: 3.44.8
           cache: true
 
       - name: Flutter version
