@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:better_player_plus/better_player_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:open_tv/backend/archive.dart';
 import 'package:flutter/services.dart';
 import 'package:marquee/marquee.dart';
 import 'package:open_tv/backend/epg.dart';
@@ -67,7 +69,25 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   bool _buffering = false;
   bool _archiveMode = false;
   EpgProgram? _currentProgram;
+  // Start of the first segment of the current archive stream (archive time,
+  // epoch seconds); null when not in the archive. The picture is at this plus
+  // [_archiveTrack.played] — see lib/backend/archive.dart for why it can't be
+  // taken from the player's position.
   int? _archiveStartEpoch;
+  ArchiveTracker? _archiveTrack;
+  // The stream [_archiveTrack] belongs to. Until the player has been handed
+  // it, the position on screen is still the previous stream's.
+  String? _archiveUrl;
+  // How far into a fresh archive window the player starts (measured).
+  Duration _archiveLead = const Duration(seconds: 30);
+  // This channel's segment grid, learnt from the last archive playlist.
+  int? _archiveGridMs;
+  int? _archiveSegMs;
+  // When the picture was paused (by the user, "still watching?" or sleep).
+  DateTime? _pausedAt;
+  // ±seconds pressed within a moment of each other, applied as one jump.
+  int _pendingSeek = 0;
+  Timer? _seekDebounce;
   bool _archiveSeeking = false;
   List<EpgProgram>? _programs;
   EpgProgram? _liveProgram; // currently-airing programme (live)
@@ -82,8 +102,9 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   Timer? _hideTimer;
   Timer? _ticker;
   Timer? _watchdog;
-  Duration _lastPos = Duration.zero;
-  Duration _lastBuffered = Duration.zero;
+  // Last watchdog sample; null right after a (re)load.
+  Duration? _lastPos;
+  Duration? _lastAhead;
   DateTime _lastProgress = DateTime.now();
   // Whether the current stream has played at all since it was (re)loaded.
   bool _progressSinceSetup = false;
@@ -153,7 +174,10 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     // Watchdog: restart a stream that stops advancing — a silent freeze, a
     // stream that never produced a first frame, or a player left dead after a
     // fatal error. Covers everything that raises no further error event.
-    _watchdog = Timer.periodic(const Duration(seconds: 2), (_) => _checkAlive());
+    _watchdog = Timer.periodic(const Duration(seconds: 2), (_) {
+      _trackArchive();
+      _checkAlive();
+    });
     _resetInactivityTimer();
     _markActiveChannel();
     _ensurePlaylist();
@@ -246,6 +270,10 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
       _archiveMode = false;
       _currentProgram = null;
       _archiveStartEpoch = null;
+      _archiveTrack = null;
+      _pausedAt = null;
+      _pendingSeek = 0;
+      _seekDebounce?.cancel();
       _programs = null;
       _liveProgram = null;
       _isFav = _ch.favorite;
@@ -277,8 +305,15 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
       _wasPlayingBeforeBackground = !_isMovie && (c?.isPlaying() ?? false);
       // Stop the watchdog from "recovering" a stream we parked on purpose.
       _backgrounded = true;
+      _trackArchive();
+      _pausedAt ??= DateTime.now();
       c?.pause();
     } else if (state == AppLifecycleState.resumed) {
+      // Read before clearing _backgrounded: the time spent asleep must not
+      // count as archive played.
+      final archiveAt = _archiveMode && _archiveStartEpoch != null
+          ? _archiveNowSec()
+          : null;
       _backgrounded = false;
       _lastProgress = DateTime.now();
       _resetInactivityTimer();
@@ -286,7 +321,10 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
         _wasPlayingBeforeBackground = false;
         if (_isLive && !_archiveMode) {
           _playLive(); // reconnect from the live edge
+        } else if (archiveAt != null) {
+          _startArchive(archiveAt); // the window moved on while asleep
         } else {
+          _pausedAt = null;
           _controller?.play();
         }
       }
@@ -354,6 +392,8 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
       // No answer -> pause, but keep the stream/session. Counts as a
       // deliberate pause so the watchdog doesn't restart it behind the user.
       _userPaused = true;
+      _trackArchive();
+      _pausedAt = DateTime.now();
       _controller?.pause();
     }
   }
@@ -367,8 +407,21 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     final c = _controller;
     final value = c?.videoPlayerController?.value;
     final pos = value?.position ?? Duration.zero;
-    if (c != null && pos != _lastPos) {
-      _lastPos = pos;
+    final bufferedEnd = (value == null || value.buffered.isEmpty)
+        ? Duration.zero
+        : value.buffered.last.end;
+    // Data loaded ahead of the picture. Both ends move together when the
+    // window slides, so only real downloading changes this.
+    final ahead = bufferedEnd - pos;
+    final prevPos = _lastPos;
+    final prevAhead = _lastAhead;
+    _lastPos = pos;
+    _lastAhead = ahead;
+    // Live and archive positions are relative to the playlist window, which
+    // jumps back a segment each time the server drops one. So only forward
+    // movement counts — otherwise a frozen stream whose window keeps sliding
+    // passes for a playing one and is never recovered.
+    if (c != null && prevPos != null && pos > prevPos) {
       _lastProgress = DateTime.now();
       // Real playback — only this resets the backoff. (The `play` event can't:
       // it fires the moment play() is called, before anything has loaded, so
@@ -384,11 +437,7 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     // ExoPlayer resumes by itself once enough is in; rebuilding the stream now
     // would throw away everything downloaded so far and start from zero —
     // on a weak connection that turns one pause into an endless loop.
-    final buffered = (value == null || value.buffered.isEmpty)
-        ? Duration.zero
-        : value.buffered.last.end;
-    if (c != null && buffered != _lastBuffered) {
-      _lastBuffered = buffered;
+    if (c != null && prevAhead != null && ahead > prevAhead) {
       _lastProgress = DateTime.now();
       return;
     }
@@ -424,15 +473,11 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     final ds = _dataSource;
     if (exiting || ds == null) return;
     try {
-      // In archive, resume from the frozen point (not the program start).
+      // In archive, resume from the moment that froze (not the programme
+      // start, and not wherever the stale window would put it).
       if (_archiveMode && _archiveStartEpoch != null) {
-        final point = _archiveStartEpoch! + _position.inSeconds;
-        final url = _timeshiftUrl(point);
-        if (url != null) {
-          _archiveStartEpoch = point;
-          await _setup(url, true);
-          return;
-        }
+        await _startArchive(_archiveNowSec(), userAction: false);
+        return;
       }
       // Rebuild via _setup so the (possibly grown) auto-buffer applies.
       await _setup(ds.url, ds.liveStream ?? false);
@@ -442,20 +487,19 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   Future<void> _init() async {
     // Start directly in archive when a past programme was picked from the guide.
     if (_isLive && widget.archiveStart != null && _ch.hasCatchup) {
-      final startEpoch =
-          widget.archiveStart!.toUtc().millisecondsSinceEpoch ~/ 1000;
-      final url = _timeshiftUrl(startEpoch);
-      if (url != null) {
-        _archiveMode = true;
-        _archiveStartEpoch = startEpoch;
-        _currentProgram = EpgProgram(
-          widget.archiveStart!,
-          widget.archiveStart!.add(const Duration(hours: 1)),
-          '',
-        );
-        await _setup(url, true);
-        return;
-      }
+      final start = widget.archiveStart!.toUtc();
+      // Placeholder until the guide is read (see [_syncArchiveProgram]).
+      _currentProgram = EpgProgram(
+        start,
+        start.add(const Duration(hours: 1)),
+        '',
+      );
+      // Plays live instead when the programme began too recently.
+      await _startArchive(
+        _archiveSecFor(start.subtract(_archivePreRoll)),
+        userAction: false,
+      );
+      return;
     }
     await _setup(_ch.url!, _isLive);
     if (_ch.mediaType == MediaType.movie) {
@@ -468,14 +512,9 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
 
   Future<void> _setup(String url, bool live) async {
     final session = _session;
-    final headers = await Sql.getChannelHeaders(_ch.id!);
+    final hdr = await _channelHeaders();
     // The user may have zapped away while the headers were being read.
     if (!mounted || exiting || session != _session) return;
-    final hdr = <String, String>{
-      if (headers?.referrer != null) "Referer": headers!.referrer!,
-      if (headers?.httpOrigin != null) "Origin": headers!.httpOrigin!,
-      if (headers?.userAgent != null) "User-Agent": headers!.userAgent!,
-    };
     final buffering = _bufferingConfig();
     final ds = BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
@@ -520,8 +559,8 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     }
     // Each attempt restarts the stall clock, so "never produced a first frame"
     // counts as a stall and the watchdog retries it.
-    _lastPos = Duration.zero;
-    _lastBuffered = Duration.zero;
+    _lastPos = null;
+    _lastAhead = null;
     _progressSinceSetup = false;
     _lastProgress = DateTime.now();
     try {
@@ -689,21 +728,158 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     return '$base${sep}utc=$utc&lutc=$now';
   }
 
+  // The provider's archive timestamps run ~50 s ahead of real time: the
+  // on-air clock of Первый канал flips to 09:00 at archive 05:59:05–05:59:08
+  // UTC, and the 12:00 news intro sits at 08:59:15 (measured 2026-09-30). EPG
+  // times are real time, so without this every programme opened ~50 s late
+  // and captions changed ~50 s early. How the stream itself behaves is in
+  // lib/backend/archive.dart.
+  static const _archiveClockLead = Duration(seconds: 50);
+  // A programme picked from the list starts this much early: listings are
+  // rounded, and cutting off the opening is worse than a few seconds of the
+  // previous show.
+  static const _archivePreRoll = Duration(seconds: 10);
+  // The last ~3 minutes aren't recorded yet (live runs ~100 s behind).
+  static const _archiveMinLagSec = 180;
+  // Longer than this and the paused window has slid away from the picture.
+  static const _archiveReanchorAfterPause = Duration(seconds: 15);
+
+  // A real-world instant (an EPG time) in archive time, seconds.
+  int _archiveSecFor(DateTime real) =>
+      real.subtract(_archiveClockLead).millisecondsSinceEpoch ~/ 1000;
+
+  // Feeds the archive tracker; every watchdog tick and before every use.
+  void _trackArchive() {
+    final track = _archiveTrack;
+    if (!_archiveMode || _archiveStartEpoch == null || track == null) return;
+    if (_dataSource?.url != _archiveUrl) return;
+    final v = _controller?.videoPlayerController?.value;
+    if (v == null || !v.initialized) return;
+    final firstLook = track.measuredLead == null;
+    track.sample(
+      v.position,
+      DateTime.now(),
+      running: !_userPaused && !_backgrounded && !_buffering,
+    );
+    // Where this stream started inside its window: the next request aims
+    // exactly that much earlier.
+    if (firstLook && track.measuredLead != null) {
+      // The player always starts on a segment boundary; the first sample can
+      // be up to a tick late, so round to whole segments.
+      final seg = _archiveSegMs ?? 10000;
+      final ms = track.measuredLead!.inMilliseconds;
+      final lead = Duration(milliseconds: (ms / seg).round() * seg);
+      if (lead <= const Duration(minutes: 2)) _archiveLead = lead;
+    }
+  }
+
+  // The archive moment on screen, in archive time (seconds).
+  int _archiveNowSec() {
+    _trackArchive();
+    return _archiveStartEpoch! +
+        (_archiveTrack?.played ?? _archiveLead).inSeconds;
+  }
+
+  // The real-world time of what is on screen — comparable with EPG times.
+  DateTime _archiveRealNow() => DateTime.fromMillisecondsSinceEpoch(
+    _archiveNowSec() * 1000,
+    isUtc: true,
+  ).add(_archiveClockLead);
+
+  Future<Map<String, String>> _channelHeaders() async {
+    final headers = await Sql.getChannelHeaders(_ch.id!);
+    return <String, String>{
+      if (headers?.referrer != null) "Referer": headers!.referrer!,
+      if (headers?.httpOrigin != null) "Origin": headers!.httpOrigin!,
+      if (headers?.userAgent != null) "User-Agent": headers!.userAgent!,
+    };
+  }
+
+  // Reads the archive playlist before the player does: its first segment says
+  // exactly where the stream starts (and the channel's segment grid), and an
+  // empty one says the moment isn't recorded yet. Small (~1 KB) and
+  // best-effort: on a failed or slow request the player simply goes ahead.
+  Future<ArchiveProbe?> _probeArchive(String url, int utc) async {
+    try {
+      final resp = await http
+          .get(Uri.parse(url), headers: await _channelHeaders())
+          .timeout(const Duration(seconds: 6));
+      if (resp.statusCode != 200) return null;
+      return parseArchivePlaylist(resp.body, requestedUtc: utc);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Plays the archive so the picture shows [target] (archive time, seconds),
+  // snapped to the channel's segment grid — down, or up for a jump forward.
+  // Too close to now for the server to have anything: plays live instead.
+  Future<void> _startArchive(
+    int target, {
+    bool userAction = true,
+    bool roundUp = false,
+  }) async {
+    final now = epgNow().millisecondsSinceEpoch ~/ 1000;
+    final days = _ch.catchupDays;
+    if (days != null && days > 0) {
+      final oldest = now - days * 86400 + 120;
+      if (target < oldest) target = oldest;
+    }
+    // The player starts [_archiveLead] into the window, so the window has to
+    // start that much before the target.
+    final utc = archiveRequestUtc(
+      landingSec: target - _archiveLead.inSeconds,
+      gridOffsetMs: _archiveGridMs,
+      segmentMs: _archiveSegMs,
+      roundUp: roundUp,
+    );
+    if (userAction) {
+      _session++;
+      _reconnectAttempts = 0;
+    }
+    final session = _session;
+    final url = utc > now - _archiveMinLagSec ? null : _timeshiftUrl(utc);
+    final probe = url == null ? null : await _probeArchive(url, utc);
+    if (!mounted || exiting || session != _session) return;
+    if (url == null || (probe != null && probe.empty)) {
+      if (userAction) _toast(S.of(context).live);
+      await _playLive();
+      return;
+    }
+    final first = probe?.firstSegmentMs;
+    if (first != null) {
+      _archiveSegMs = probe!.segmentMs;
+      _archiveGridMs = first % probe.segmentMs;
+    }
+    _userPaused = false;
+    _pausedAt = null;
+    _archiveMode = true;
+    // Unknown first segment: it is the next boundary after utc, on average
+    // half a segment later.
+    _archiveStartEpoch = first != null
+        ? first ~/ 1000
+        : utc + ((_archiveSegMs ?? 10000) ~/ 2000);
+    _archiveTrack = ArchiveTracker(_archiveLead);
+    _archiveUrl = url;
+    await _setup(url, true); // a timeshift is a live-style playlist
+  }
+
   // Keeps the archive caption on the show actually playing. The archive runs
   // on past the programme it was opened on, and ±30 s jumps cross into the
   // neighbouring shows — the caption used to stay on the first one for good
   // (and was blank when the archive was opened from the guide).
   void _syncArchiveProgram() {
-    final base = _archiveStartEpoch;
-    if (!_archiveMode || base == null) return;
+    if (!_archiveMode || _archiveStartEpoch == null) return;
     final programs = _programs;
     if (programs == null) {
       _loadArchivePrograms();
       return;
     }
-    final at = DateTime.fromMillisecondsSinceEpoch(
-      (base + _position.inSeconds) * 1000,
-      isUtc: true,
+    // Looked up slightly ahead, so a programme opened [_archivePreRoll] early
+    // is captioned from its first second rather than after the tail of the
+    // previous show.
+    final at = _archiveRealNow().add(
+      _archivePreRoll + const Duration(seconds: 5),
     );
     for (final p in programs) {
       if (!p.start.isAfter(at) && p.stop.isAfter(at)) {
@@ -742,23 +918,16 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     _archiveMode = false;
     _currentProgram = null;
     _archiveStartEpoch = null;
+    _archiveTrack = null;
+    _pausedAt = null;
     await _setup(_ch.url!, true);
   }
 
   Future<void> _playArchive(EpgProgram p) async {
-    // p.start is UTC; millisecondsSinceEpoch is the absolute instant, which is
-    // exactly what Flussonic's utc= parameter expects — independent of both the
-    // device timezone and the EPG's own (+0300) offset.
-    final startEpoch = p.start.millisecondsSinceEpoch ~/ 1000;
-    final url = _timeshiftUrl(startEpoch);
-    if (url == null) return;
-    _session++;
-    _userPaused = false;
-    _reconnectAttempts = 0;
-    _archiveMode = true;
+    // p.start is an absolute instant (parsed with the EPG's own +0300), so
+    // neither the device timezone nor the display setting enters here.
     _currentProgram = p;
-    _archiveStartEpoch = startEpoch;
-    await _setup(url, true); // timeshift = live-style playlist
+    await _startArchive(_archiveSecFor(p.start.subtract(_archivePreRoll)));
   }
 
   // Loads & filters the archive programme list. Reads the shared guide cache —
@@ -903,9 +1072,23 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     if (c == null) return;
     if (c.isPlaying() ?? false) {
       _userPaused = true; // deliberate pause — the watchdog must leave it alone
+      _trackArchive();
+      _pausedAt = DateTime.now();
       c.pause();
     } else {
+      // The archive window kept sliding during the pause; after more than a
+      // few seconds the segments the player would continue with are gone and
+      // the resume fails or lands elsewhere. Re-request from the paused moment.
+      final pausedAt = _pausedAt;
+      if (_archiveMode &&
+          _archiveStartEpoch != null &&
+          pausedAt != null &&
+          DateTime.now().difference(pausedAt) > _archiveReanchorAfterPause) {
+        _startArchive(_archiveNowSec()); // read while still counted as paused
+        return;
+      }
       _userPaused = false;
+      _pausedAt = null;
       _lastProgress = DateTime.now();
       c.play();
     }
@@ -918,7 +1101,18 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     // unreliable, so re-anchor the playlist to a new wall-clock point via utc
     // (the only seek this provider honours).
     if (_archiveMode && _archiveStartEpoch != null) {
-      _seekArchive(seconds);
+      // Each jump reloads the stream, so presses in quick succession are
+      // added up and applied once: 3 × −30 is one −90 s jump, not three
+      // reloads racing each other.
+      _pendingSeek += seconds;
+      final total = _pendingSeek;
+      _toast('${total >= 0 ? '+' : ''}$total ${S.of(context).seconds}');
+      _seekDebounce?.cancel();
+      _seekDebounce = Timer(const Duration(milliseconds: 700), () {
+        final s = _pendingSeek;
+        _pendingSeek = 0;
+        if (mounted && !exiting && s != 0) _seekArchive(s);
+      });
       return;
     }
     var target = _position + Duration(seconds: seconds);
@@ -928,23 +1122,13 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     c.seekTo(target);
   }
 
-  // Re-anchors the archive at (current playback point ± seconds).
+  // Re-anchors the archive at (moment on screen ± seconds). Past the live edge
+  // it switches to live; before the oldest kept day it stops there.
   Future<void> _seekArchive(int seconds) async {
-    final base = _archiveStartEpoch;
-    if (base == null || _archiveSeeking) return;
+    if (_archiveStartEpoch == null) return;
     _archiveSeeking = true;
     try {
-      final cur = base + _position.inSeconds;
-      final now = epgNow().millisecondsSinceEpoch ~/ 1000;
-      var target = cur + seconds;
-      if (target > now - 3) target = now - 3; // don't cross the live edge
-      if (target < 0) target = 0;
-      final url = _timeshiftUrl(target);
-      if (url == null) return;
-      _archiveStartEpoch = target;
-      final sign = seconds >= 0 ? '+' : '';
-      _toast('$sign$seconds ${S.of(context).seconds}');
-      await _setup(url, true);
+      await _startArchive(_archiveNowSec() + seconds, roundUp: seconds > 0);
     } catch (_) {
     } finally {
       _archiveSeeking = false;
@@ -1246,6 +1430,65 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
           ? "ARCHIVE"
           : "ARCHIVE · ${_stamp(p.start)}"
                 "${p.title.isEmpty ? '' : '  ${p.title}'}";
+      final watching = _archiveStartEpoch == null ? null : _archiveRealNow();
+      if (p != null && watching != null && p.stop.isAfter(p.start)) {
+        // Same bar as live, over the programme being watched, plus the time of
+        // day on screen — so a jump visibly lands where it should.
+        final totalSec = p.stop.difference(p.start).inSeconds;
+        final elapsedSec = watching
+            .difference(p.start)
+            .inSeconds
+            .clamp(0, totalSec);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Text(
+                  _hhmm(p.start),
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: (elapsedSec / totalSec).clamp(0.0, 1.0).toDouble(),
+                      minHeight: 6,
+                      backgroundColor: Colors.white24,
+                      valueColor: const AlwaysStoppedAnimation(Colors.amber),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  _hhmm(p.stop),
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.history, color: Colors.amber, size: 14),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    "$label  ·  ${_hhmm(watching)}",
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      }
       return Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -1427,6 +1670,7 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     _ticker?.cancel();
     _watchdog?.cancel();
     _inactivityTimer?.cancel();
+    _seekDebounce?.cancel();
     _focusNode.dispose();
     _controller?.dispose(forceDispose: true);
     super.dispose();
