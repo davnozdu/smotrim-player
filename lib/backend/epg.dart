@@ -119,7 +119,10 @@ int channelShiftHours(String name) {
 /// a show from the guide then opens the archive at a moment when something else
 /// was on. Regions in brackets ("+0 (Липецк)") still collapse into the base
 /// key — those run the base schedule on the same clock.
-String normalizeChannelNameLoose(String name) {
+String normalizeChannelNameLoose(String name) =>
+    _looseKey(name, keepCountry: false);
+
+String _looseKey(String name, {required bool keepCountry}) {
   var s = name.toLowerCase().replaceAll('&amp;', '&');
   final shift = channelShiftHours(s);
   s = s.replaceAll(_parensRegex, '');
@@ -129,14 +132,62 @@ String normalizeChannelNameLoose(String name) {
   s = s.replaceAllMapped(_shiftTokenRegex, (m) => m.group(1)!);
   final out = <String>[];
   for (final t in s.split(_splitRegex)) {
-    if (t.isEmpty || _qualTokens.contains(t) || _countryTokens.contains(t)) {
-      continue;
-    }
+    if (t.isEmpty || _qualTokens.contains(t)) continue;
+    if (!keepCountry && _countryTokens.contains(t)) continue;
     out.add(t);
   }
   final base = out.join();
   if (base.isEmpty || shift == 0) return base;
   return '$base@$shift';
+}
+
+// The whole name — quality, country and region included — with only case and
+// punctuation ignored. The shift stays a separate "@N" suffix, so "ТНТ4" and
+// "ТНТ +4" remain two different channels.
+String _exactKey(String name) {
+  final s = name.toLowerCase().replaceAll('&amp;', '&');
+  final shift = channelShiftHours(s);
+  final base = s
+      .replaceAllMapped(_shiftTokenRegex, (m) => m.group(1)!)
+      .replaceAll(_nonAlphaNumRegex, '');
+  if (base.isEmpty) return '';
+  return shift == 0 ? '=$base' : '=$base@$shift';
+}
+
+// Quality markers dropped, country kept: "Animal Planet HD" -> "animalplanet",
+// "Animal Planet HD DE" -> "animalplanetde".
+String _regionalKey(String name) {
+  final k = _looseKey(name, keepCountry: true);
+  return k.isEmpty ? '' : '~$k';
+}
+
+/// Keys an EPG display-name is filed under, one per matching tier.
+List<String> _displayNameKeys(String displayName) => [
+  _exactKey(displayName),
+  _regionalKey(displayName),
+  normalizeChannelNameLoose(displayName),
+];
+
+/// Keys to look a playlist channel up by, most specific first.
+///
+/// The loose key alone collapses different feeds onto one entry: with the
+/// country dropped, "Animal Planet" and "Animal Planet HD DE" are the same key,
+/// and "RU.TV" becomes plain "tv" — which a dozen channels share. Whichever of
+/// those had the most programmes used to win, so a channel regularly showed
+/// another country's schedule (RU.TV showed Armenia TV). An exact or
+/// same-country match now always beats the loose one; the loose key and the
+/// HD->base fallback only apply when nothing closer exists.
+List<String> _channelKeys(String channelName) {
+  final keys = <String>[];
+  void add(String k) {
+    if (k.isNotEmpty && !keys.contains(k)) keys.add(k);
+  }
+
+  add(_exactKey(channelName));
+  add(_regionalKey(channelName));
+  add(normalizeChannelNameLoose(channelName));
+  add(normalizeChannelNameLoose(channelName.replaceAll(_qualityStripRegex, ' ')));
+  return keys;
 }
 
 // Simple in-memory cache so refreshing several sources in a row doesn't
@@ -159,12 +210,15 @@ Future<Map<String, String>> fetchEpgLogos(String epgUrl) async {
   final client = http.Client();
   try {
     final request = http.Request('GET', Uri.parse(epgUrl));
-    final response = await client.send(request);
+    // Logos are optional: on a stalled line give up rather than hold the whole
+    // playlist import hostage.
+    final response = await client.send(request).timeout(_connectTimeout);
     if (response.statusCode != 200) {
       throw Exception('Failed to download EPG: ${response.statusCode}');
     }
     final buffer = StringBuffer();
     await for (final line in response.stream
+        .timeout(_idleTimeout)
         .transform(utf8.decoder)
         .transform(const LineSplitter())) {
       buffer.writeln(line);
@@ -197,6 +251,12 @@ Future<Map<String, List<EpgProgram>>>? _guideInflight;
 String? _guideInflightKey;
 const _guideMemTtl = Duration(minutes: 45);
 const _guideDiskTtl = Duration(hours: 6);
+// How old a disk copy may be when the download fails and it is all there is.
+const _guideStaleTtl = Duration(hours: 36);
+// A stalled socket on a bad line would otherwise hang the download (and every
+// screen waiting on it) until the OS gives up, which can take hours.
+const _connectTimeout = Duration(seconds: 20);
+const _idleTimeout = Duration(seconds: 30);
 
 /// How far back a guide keeps programmes. The archive EPG carries 8 days of
 /// past schedule and is the source for the 7-day archive list, so it is parsed
@@ -239,14 +299,9 @@ Future<Set<String>> _epgScope() async {
   var names = <String>{};
   try {
     for (final n in await Sql.getLivestreamNames()) {
-      final exact = normalizeChannelNameLoose(n);
-      if (exact.isNotEmpty) names.add(exact);
-      // Keep the HD->base fallback key too, so an HD channel still matches an
-      // EPG that only lists the SD schedule.
-      final base = normalizeChannelNameLoose(
-        n.replaceAll(_qualityStripRegex, ' '),
-      );
-      if (base.isNotEmpty) names.add(base);
+      // Every key the lookup may try, including the HD->base fallback, so an
+      // HD channel still matches an EPG that only lists the SD schedule.
+      names.addAll(_channelKeys(n));
     }
   } catch (_) {
     names = <String>{}; // empty = no filtering (safe fallback)
@@ -274,7 +329,8 @@ void _storeGuide(String key, Map<String, List<EpgProgram>> guide) {
 
 Future<File> _guideCacheFile(String key) async {
   final dir = await getTemporaryDirectory();
-  return File('${dir.path}/epg_guide_${key.hashCode}.json');
+  // v2: keys carry matching tiers — a guide cached by an older build has none.
+  return File('${dir.path}/epg_guide_v2_${key.hashCode}.json');
 }
 
 /// Returns programmes for every channel (normalized name -> programmes in a
@@ -345,12 +401,24 @@ Future<Map<String, List<EpgProgram>>> _loadGuide(
   }
   // 3) Download + parse + persist — all inside the isolate.
   final cachePath = (await _guideCacheFile(key)).path;
-  final data = await compute(_parseAllPrograms, {
-    'url': url,
-    'cache': cachePath,
-    'pastHours': _pastWindowFor(url).inHours,
-    'names': scope.toList(),
-  });
+  final Map<String, dynamic> data;
+  try {
+    data = await compute(_parseAllPrograms, {
+      'url': url,
+      'cache': cachePath,
+      'pastHours': _pastWindowFor(url).inHours,
+      'names': scope.toList(),
+    });
+  } catch (_) {
+    // No usable connection. A guide from yesterday is still right about what
+    // is on today (the feed covers 36 h ahead) — far better than a blank grid
+    // on a flaky line. It goes into memory like a fresh one, so the download
+    // is retried once the memory TTL runs out instead of on every screen.
+    final stale = await _readGuideDisk(key, maxAge: _guideStaleTtl);
+    if (stale == null) rethrow;
+    _storeGuide(key, stale);
+    return stale;
+  }
   // Only a fresh response carries a server clock to compare against; a guide
   // restored from disk leaves the last measured skew alone.
   final skew = Duration(milliseconds: (data['skew'] as int?) ?? 0);
@@ -367,11 +435,12 @@ Map<String, List<EpgProgram>> _buildGuide(Map data) {
   final progsById = data['progs'] as Map;
   final result = <String, List<EpgProgram>>{};
   progsById.forEach((id, list) {
-    final programs =
-        (list as List)
-            .map((m) => _programFromMap(Map<String, dynamic>.from(m as Map)))
-            .toList()
-          ..sort((a, b) => a.start.compareTo(b.start));
+    final programs = _withoutOverlaps(
+      (list as List)
+          .map((m) => _programFromMap(Map<String, dynamic>.from(m as Map)))
+          .toList()
+        ..sort((a, b) => a.start.compareTo(b.start)),
+    );
     for (final name in (namesById[id] as List? ?? const [])) {
       final existing = result[name as String];
       // HD and SD variants of a channel can collapse to the same normalized
@@ -383,6 +452,61 @@ Map<String, List<EpgProgram>> _buildGuide(Map data) {
     }
   });
   return result;
+}
+
+/// Builds a guide the way a download does, from display-names and programmes
+/// per EPG channel id. Only for tests: the real input comes from the parser.
+@visibleForTesting
+Map<String, List<EpgProgram>> buildGuideForTest(
+  Map<String, List<String>> displayNamesById,
+  Map<String, List<EpgProgram>> programsById,
+) => _buildGuide({
+  'names': {
+    for (final e in displayNamesById.entries)
+      e.key: {for (final n in e.value) ..._displayNameKeys(n)}
+          .where((k) => k.isNotEmpty)
+          .toList(),
+  },
+  'progs': {
+    for (final e in programsById.entries)
+      e.key: [
+        for (final p in e.value)
+          {
+            's': p.start.millisecondsSinceEpoch,
+            'e': p.stop.millisecondsSinceEpoch,
+            't': p.title,
+          },
+      ],
+  },
+});
+
+/// Trims each programme so it ends no later than the next one starts, and
+/// drops exact duplicates. Feeds are not always consistent — iptvx.one has
+/// overlaps on about one channel in twelve (a show running a few minutes past
+/// the next one's start, or a short news slot nested inside a film). Left as
+/// is, those draw as blocks stacked on top of each other in the grid, and "what
+/// is on now" depends on which of the two happens to come first. [sorted] must
+/// be ordered by start.
+List<EpgProgram> _withoutOverlaps(List<EpgProgram> sorted) {
+  final out = <EpgProgram>[];
+  for (final p in sorted) {
+    if (out.isNotEmpty) {
+      final prev = out.last;
+      if (p.start == prev.start) {
+        // Same slot listed twice: a title beats none, then the longer wins.
+        final better = prev.title.isEmpty != p.title.isEmpty
+            ? p.title.isNotEmpty
+            : p.stop.isAfter(prev.stop);
+        if (better) out[out.length - 1] = p;
+        continue;
+      }
+      if (p.start.isBefore(prev.stop)) {
+        out[out.length - 1] = EpgProgram(prev.start, p.start, prev.title);
+      }
+    }
+    out.add(p);
+  }
+  return out;
 }
 
 // Matches quality markers even when glued to the name (e.g. "ТВ HD", "ТВHD").
@@ -398,37 +522,32 @@ List<EpgProgram> epgProgramsFor(
   Map<String, List<EpgProgram>> guide,
   String channelName,
 ) {
-  final k1 = normalizeChannelNameLoose(channelName);
-  final p1 = guide[k1];
-  if (p1 != null && p1.isNotEmpty) return p1;
-  final k2 = normalizeChannelNameLoose(
-    channelName.replaceAll(_qualityStripRegex, ' '),
-  );
-  if (k2 != k1) {
-    final p2 = guide[k2];
-    if (p2 != null && p2.isNotEmpty) return p2;
+  for (final k in _channelKeys(channelName)) {
+    final p = guide[k];
+    if (p != null && p.isNotEmpty) return p;
   }
-  return p1 ?? const [];
+  return const [];
 }
 
-/// Current "now playing" title for a channel, with the same HD->base fallback.
+/// Current "now playing" title for a channel, matched the same way as
+/// [epgProgramsFor] so the catalog, the guide and the player agree.
 String? epgNowTitleFor(Map<String, String> nowMap, String channelName) {
-  final k1 = normalizeChannelNameLoose(channelName);
-  final t1 = nowMap[k1];
-  if (t1 != null && t1.isNotEmpty) return t1;
-  final k2 = normalizeChannelNameLoose(
-    channelName.replaceAll(_qualityStripRegex, ' '),
-  );
-  if (k2 != k1) return nowMap[k2];
+  for (final k in _channelKeys(channelName)) {
+    final t = nowMap[k];
+    if (t != null && t.isNotEmpty) return t;
+  }
   return null;
 }
 
 // Reads & decodes the on-disk guide in a background isolate (if fresh enough).
-Future<Map<String, List<EpgProgram>>?> _readGuideDisk(String key) async {
+Future<Map<String, List<EpgProgram>>?> _readGuideDisk(
+  String key, {
+  Duration maxAge = _guideDiskTtl,
+}) async {
   try {
     final f = await _guideCacheFile(key);
     if (!await f.exists()) return null;
-    if (DateTime.now().difference(await f.lastModified()) > _guideDiskTtl) {
+    if (DateTime.now().difference(await f.lastModified()) > maxAge) {
       return null;
     }
     final raw = await compute(_decodeGuideFile, f.path);
@@ -463,7 +582,9 @@ Future<Map<String, dynamic>> _parseAllPrograms(Map<String, dynamic> args) async 
   final scope = ((args['names'] as List?) ?? const []).cast<String>().toSet();
   final client = http.Client();
   try {
-    final response = await client.send(http.Request('GET', Uri.parse(epgUrl)));
+    final response = await client
+        .send(http.Request('GET', Uri.parse(epgUrl)))
+        .timeout(_connectTimeout);
     if (response.statusCode != 200) {
       throw Exception('Failed to download EPG: ${response.statusCode}');
     }
@@ -479,7 +600,9 @@ Future<Map<String, dynamic>> _parseAllPrograms(Map<String, dynamic> args) async 
             .inMilliseconds;
       } catch (_) {}
     }
-    Stream<List<int>> bytes = response.stream;
+    // A slow line is fine; a line that stops delivering altogether fails the
+    // download (and falls back to the disk copy) instead of hanging it.
+    Stream<List<int>> bytes = response.stream.timeout(_idleTimeout);
     if (epgUrl.endsWith('.gz')) {
       bytes = bytes.transform(gzip.decoder);
     }
@@ -502,12 +625,14 @@ Future<Map<String, dynamic>> _parseAllPrograms(Map<String, dynamic> args) async 
         if (id != null) {
           final names = <String>[];
           for (final dn in _displayNameRegex.allMatches(block)) {
-            final k = normalizeChannelNameLoose(
+            final keys = _displayNameKeys(
               (dn.group(1) ?? '').replaceAll(_tagRegex, ''),
             );
-            if (k.isEmpty) continue;
-            if (scope.isNotEmpty && !scope.contains(k)) continue;
-            names.add(k);
+            for (final k in keys) {
+              if (k.isEmpty || names.contains(k)) continue;
+              if (scope.isNotEmpty && !scope.contains(k)) continue;
+              names.add(k);
+            }
           }
           if (names.isNotEmpty) idNames[id] = names;
         }

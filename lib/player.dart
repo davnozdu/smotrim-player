@@ -61,6 +61,10 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   bool _controlsVisible = false;
   int _focusedIndex = 2;
   bool _isPlaying = true;
+  // ExoPlayer is waiting for data. The player runs without its own controls,
+  // so nothing else tells the viewer that a frozen picture is loading, not
+  // hung.
+  bool _buffering = false;
   bool _archiveMode = false;
   EpgProgram? _currentProgram;
   int? _archiveStartEpoch;
@@ -79,7 +83,14 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   Timer? _ticker;
   Timer? _watchdog;
   Duration _lastPos = Duration.zero;
+  Duration _lastBuffered = Duration.zero;
   DateTime _lastProgress = DateTime.now();
+  // Whether the current stream has played at all since it was (re)loaded.
+  bool _progressSinceSetup = false;
+  bool _guideLoadScheduled = false;
+  bool _archiveProgramsLoading = false;
+  // The buffering the current controller's ExoPlayer was created with.
+  BetterPlayerBufferingConfiguration? _controllerBuffering;
   bool _reconnecting = false;
   int _reconnectAttempts = 0;
   // True only when the *user* paused. The watchdog must never fight a
@@ -94,6 +105,14 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   // Long enough to let ExoPlayer recover a normal rebuffer on a slow box,
   // short enough that a frozen picture doesn't sit there.
   static const _stallLimit = Duration(seconds: 12);
+  // Before the first frame. A cold start on a slow line — playlist, then a
+  // whole first segment — easily takes longer than 12 s, and restarting it at
+  // 12 s means it never gets to play at all. Hard failures don't wait for
+  // this: ExoPlayer reports them as errors, which reconnect on their own.
+  static const _startLimit = Duration(seconds: 25);
+  // How long a stream load may block the caller (zapping, reconnects). The
+  // load itself carries on past this; only the waiting stops.
+  static const _setupTimeout = Duration(seconds: 20);
   int _autoBufferSec = 20;
   final List<DateTime> _rebufferTimes = [];
   final FocusNode _focusNode = FocusNode();
@@ -120,7 +139,16 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     ]);
     _init();
     _ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      if (mounted && _controlsVisible) setState(() {});
+      if (!mounted || !_controlsVisible) return;
+      if (_archiveMode) {
+        _syncArchiveProgram();
+      } else {
+        // The show ended while the controls are up: move on to the next one
+        // instead of sitting at 100 % with "0 min left".
+        final p = _liveProgram;
+        if (p != null && !epgNow().isBefore(p.stop)) _loadLiveProgram();
+      }
+      setState(() {});
     });
     // Watchdog: restart a stream that stops advancing — a silent freeze, a
     // stream that never produced a first frame, or a player left dead after a
@@ -129,8 +157,9 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     _resetInactivityTimer();
     _markActiveChannel();
     _ensurePlaylist();
-    // The one full load of the session, before playback has settled.
-    _loadLiveProgram(cachedOnly: false);
+    // Whatever the catalog or guide already loaded. The one full load of the
+    // session waits until the picture is running (see [_onFirstProgress]).
+    _loadLiveProgram();
   }
 
   // Android is short on memory — typically an hour into a session on a 2 GB
@@ -336,9 +365,30 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     // Nothing has been set up yet — nothing to watch over.
     if (_dataSource == null) return;
     final c = _controller;
-    final pos = c?.videoPlayerController?.value.position ?? Duration.zero;
+    final value = c?.videoPlayerController?.value;
+    final pos = value?.position ?? Duration.zero;
     if (c != null && pos != _lastPos) {
       _lastPos = pos;
+      _lastProgress = DateTime.now();
+      // Real playback — only this resets the backoff. (The `play` event can't:
+      // it fires the moment play() is called, before anything has loaded, so
+      // every failed reconnect used to reset it and the backoff never grew.)
+      _reconnectAttempts = 0;
+      if (!_progressSinceSetup) {
+        _progressSinceSetup = true;
+        _onFirstProgress();
+      }
+      return;
+    }
+    // Picture frozen but data still arriving: a rebuffer on a slow line.
+    // ExoPlayer resumes by itself once enough is in; rebuilding the stream now
+    // would throw away everything downloaded so far and start from zero —
+    // on a weak connection that turns one pause into an endless loop.
+    final buffered = (value == null || value.buffered.isEmpty)
+        ? Duration.zero
+        : value.buffered.last.end;
+    if (c != null && buffered != _lastBuffered) {
+      _lastBuffered = buffered;
       _lastProgress = DateTime.now();
       return;
     }
@@ -349,8 +399,9 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     //
     // The limit stretches after repeated failed recoveries (12s, 24s, 36s,
     // 48s) so a stream that is simply gone isn't rebuilt every 12 seconds all
-    // night. The first successful `play` event resets it.
-    final limit = _stallLimit * (1 + _reconnectAttempts.clamp(0, 3));
+    // night. Actual playback (the position moving again) resets it.
+    final base = _progressSinceSetup ? _stallLimit : _startLimit;
+    final limit = base * (1 + _reconnectAttempts.clamp(0, 3));
     if (DateTime.now().difference(_lastProgress) > limit) {
       _lastProgress = DateTime.now();
       _reconnectAttempts++;
@@ -425,15 +476,32 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
       if (headers?.httpOrigin != null) "Origin": headers!.httpOrigin!,
       if (headers?.userAgent != null) "User-Agent": headers!.userAgent!,
     };
+    final buffering = _bufferingConfig();
     final ds = BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
       url,
       liveStream: live,
       headers: hdr.isNotEmpty ? hdr : null,
-      bufferingConfiguration: _bufferingConfig(),
+      bufferingConfiguration: buffering,
     );
     _dataSource = ds;
     var controller = _controller;
+    // ExoPlayer takes its buffer sizes once, when it is created — a data source
+    // with a different buffering config changes nothing on an existing player.
+    // So the Auto buffer that grew after repeated stalls (or the low-latency /
+    // archive switch) never actually applied. Swap in a fresh player instead.
+    if (controller != null && !_sameBuffering(_controllerBuffering, buffering)) {
+      final old = controller;
+      controller = null;
+      old.removeEventsListener(_onEvent); // dispose() below also pauses it
+      setState(() {
+        _controller = null;
+        _buffering = false;
+      });
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => old.dispose(forceDispose: true),
+      );
+    }
     final isNew = controller == null;
     if (controller == null) {
       controller = BetterPlayerController(
@@ -453,9 +521,19 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     // Each attempt restarts the stall clock, so "never produced a first frame"
     // counts as a stall and the watchdog retries it.
     _lastPos = Duration.zero;
+    _lastBuffered = Duration.zero;
+    _progressSinceSetup = false;
     _lastProgress = DateTime.now();
     try {
-      await controller.setupDataSource(ds);
+      final loading = controller.setupDataSource(ds);
+      // Movies wait it out: nothing zaps or watches over them, and _init seeks
+      // to the saved position right after, which needs a loaded source.
+      await (_isMovie ? loading : loading.timeout(_setupTimeout));
+    } on TimeoutException {
+      // Still loading on a slow line. Keep the player — it may yet start, and
+      // the watchdog takes over if it doesn't. Waiting here instead left
+      // zapping (and the watchdog, which stands aside during a zap) locked out
+      // for as long as the load hung — for good, if a newer load superseded it.
     } catch (_) {
       // Load failed outright (DNS down right after a reboot, dead host, …).
       // Leave it to the watchdog: it retries on the same schedule as a freeze,
@@ -467,7 +545,32 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
       if (isNew) controller.dispose(forceDispose: true);
       return;
     }
-    setState(() => _controller = controller);
+    setState(() {
+      _controller = controller;
+      _controllerBuffering = buffering;
+    });
+  }
+
+  static bool _sameBuffering(
+    BetterPlayerBufferingConfiguration? a,
+    BetterPlayerBufferingConfiguration b,
+  ) =>
+      a != null &&
+      a.minBufferMs == b.minBufferMs &&
+      a.maxBufferMs == b.maxBufferMs &&
+      a.bufferForPlaybackMs == b.bufferForPlaybackMs &&
+      a.bufferForPlaybackAfterRebufferMs == b.bufferForPlaybackAfterRebufferMs;
+
+  // Runs once per player, when the first picture is actually moving: the full
+  // guide load (a download of up to ~20 MB with the extended archive) would
+  // otherwise compete with the stream for bandwidth right when it is trying
+  // to start — exactly what a weak connection can't afford.
+  void _onFirstProgress() {
+    if (_guideLoadScheduled) return;
+    _guideLoadScheduled = true;
+    Timer(const Duration(seconds: 5), () {
+      if (mounted && !exiting) _loadLiveProgram(cachedOnly: false);
+    });
   }
 
   BetterPlayerBufferingConfiguration _bufferingConfig() {
@@ -487,24 +590,34 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
       minBufferMs: ms,
       maxBufferMs: (ms * 2).clamp(30000, 600000),
       bufferForPlaybackMs: 2500,
-      bufferForPlaybackAfterRebufferMs: 5000,
+      // After a stall, refill more before resuming as the buffer grows (5 s at
+      // 20 s, up to 15 s). Resuming on a thin margin over a weak line just
+      // stalls again a few seconds later — play/stop/play is worse than one
+      // slightly longer pause.
+      bufferForPlaybackAfterRebufferMs: (ms ~/ 4).clamp(5000, 15000),
     );
   }
 
   void _onEvent(BetterPlayerEvent event) {
     switch (event.betterPlayerEventType) {
       case BetterPlayerEventType.play:
+        // Fires when play() is called, not when frames move — so it restarts
+        // the stall clock but leaves the backoff alone (see [_checkAlive]).
         _lastProgress = DateTime.now();
-        _reconnectAttempts = 0; // playback resumed → reset backoff
         if (mounted) setState(() => _isPlaying = true);
         break;
       case BetterPlayerEventType.pause:
         if (mounted) setState(() => _isPlaying = false);
         break;
       case BetterPlayerEventType.bufferingStart:
+        if (mounted) setState(() => _buffering = true);
         _onRebuffer();
         break;
+      case BetterPlayerEventType.bufferingEnd:
+        if (mounted) setState(() => _buffering = false);
+        break;
       case BetterPlayerEventType.exception:
+        if (mounted) setState(() => _buffering = false);
         _onDisconnect();
         break;
       case BetterPlayerEventType.finished:
@@ -518,6 +631,9 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   // Auto-buffer: grow the buffer when the stream stalls repeatedly.
   void _onRebuffer() {
     if (widget.settings.bufferSeconds > 0) return; // only in Auto mode
+    // A load, a zap or an archive jump buffers too. Only a stall in the middle
+    // of playback says the connection can't keep up.
+    if (!_progressSinceSetup) return;
     final now = DateTime.now();
     _rebufferTimes.add(now);
     _rebufferTimes.removeWhere(
@@ -571,6 +687,52 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
     if (utc >= now) return null;
     final sep = base.contains('?') ? '&' : '?';
     return '$base${sep}utc=$utc&lutc=$now';
+  }
+
+  // Keeps the archive caption on the show actually playing. The archive runs
+  // on past the programme it was opened on, and ±30 s jumps cross into the
+  // neighbouring shows — the caption used to stay on the first one for good
+  // (and was blank when the archive was opened from the guide).
+  void _syncArchiveProgram() {
+    final base = _archiveStartEpoch;
+    if (!_archiveMode || base == null) return;
+    final programs = _programs;
+    if (programs == null) {
+      _loadArchivePrograms();
+      return;
+    }
+    final at = DateTime.fromMillisecondsSinceEpoch(
+      (base + _position.inSeconds) * 1000,
+      isUtc: true,
+    );
+    for (final p in programs) {
+      if (!p.start.isAfter(at) && p.stop.isAfter(at)) {
+        _currentProgram = p;
+        return;
+      }
+    }
+  }
+
+  Future<void> _loadArchivePrograms() async {
+    if (_archiveProgramsLoading) return;
+    _archiveProgramsLoading = true;
+    try {
+      final url = widget.settings.extendedArchive
+          ? archiveEpgUrl
+          : widget.settings.epgUrl.trim();
+      if (url.isEmpty) return;
+      // Memory only: whatever the archive was picked from is already loaded,
+      // and a download in the middle of playback is what this must not start.
+      final guide = await fetchAllPrograms(url, cachedOnly: true);
+      final progs = epgProgramsFor(guide, _ch.name);
+      if (!mounted || progs.isEmpty || !_archiveMode) return;
+      _programs ??= progs;
+      _syncArchiveProgram();
+      setState(() {});
+    } catch (_) {
+    } finally {
+      _archiveProgramsLoading = false;
+    }
   }
 
   Future<void> _playLive() async {
@@ -816,6 +978,7 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
   }
 
   void _showControls() {
+    _syncArchiveProgram();
     setState(() => _controlsVisible = true);
     _resetHideTimer();
     _loadLiveProgram(); // refresh the "now" programme each time controls open
@@ -918,9 +1081,8 @@ class _PlayerState extends State<Player> with WidgetsBindingObserver {
               fit: StackFit.expand,
               children: [
                 Container(color: Colors.black),
-                if (_controller != null)
-                  BetterPlayer(controller: _controller!)
-                else
+                if (_controller != null) BetterPlayer(controller: _controller!),
+                if (_controller == null || _buffering)
                   const Center(
                     child: CircularProgressIndicator(color: Colors.white),
                   ),

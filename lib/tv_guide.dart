@@ -52,6 +52,8 @@ class _TvGuideState extends State<TvGuide> {
   final FocusNode _searchFocus = FocusNode();
   final TextEditingController _searchCtrl = TextEditingController();
   Timer? _debounce;
+  // Moves the red "now" line along while the guide stays open.
+  Timer? _clock;
 
   List<_GuideRow> _allRows = [];
   List<_Item> _items = [];
@@ -100,23 +102,36 @@ class _TvGuideState extends State<TvGuide> {
       return KeyEventResult.ignored;
     };
     _load();
+    _clock = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted && !_loading) setState(() {});
+    });
   }
 
   // The visible time span, half-hour aligned around "now". Starts 6 hours in
   // the past so recent programmes are reachable from here: pressing OK on one
   // that already ended opens it in the archive. One hour (the old value) made
   // the guide almost useless for catchup.
+  //
+  // Aligned in the *display* timezone — the one the header labels use. Flooring
+  // in the device zone instead puts the half-hour marks at :15/:45 whenever the
+  // two differ by a non-whole hour.
   void _computeWindow() {
-    final now = epgNow().toLocal();
-    final flooredMin = now.minute < 30 ? 0 : 30;
-    _windowStart = DateTime(now.year, now.month, now.day, now.hour, flooredMin)
-        .subtract(const Duration(hours: 6));
+    final now = epgNow();
+    final shown = epgLocal(now);
+    final intoSlot = Duration(
+      minutes: shown.minute % 30,
+      seconds: shown.second,
+      milliseconds: shown.millisecond,
+      microseconds: shown.microsecond,
+    );
+    _windowStart = now.subtract(intoSlot).subtract(const Duration(hours: 6));
     _windowEnd = _windowStart.add(const Duration(hours: 36));
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _clock?.cancel();
     _h.dispose();
     _vBody.dispose();
     _vLeft.dispose();
@@ -526,11 +541,20 @@ class _TvGuideState extends State<TvGuide> {
     final row = (item as _RowItem).row;
     final isFocusedRow = _navRows.isNotEmpty && i == _navRows[_sel];
     final children = <Widget>[];
+    double x(DateTime t) => t.difference(_windowStart).inMinutes * pxPerMin;
     for (var j = 0; j < row.programs.length; j++) {
       final p = row.programs[j];
-      final left = p.start.difference(_windowStart).inMinutes * pxPerMin;
-      var width = p.stop.difference(p.start).inMinutes * pxPerMin;
-      if (width < 24) width = 24;
+      // A show that began before the window starts at its left edge, so its
+      // title is readable instead of scrolled off to negative x.
+      final left = x(p.start) < 0 ? 0.0 : x(p.start);
+      var width = x(p.stop) - left;
+      // Very short slots get a minimum width to stay focusable — but never so
+      // wide that they cover the next programme.
+      final next = j + 1 < row.programs.length
+          ? x(row.programs[j + 1].start)
+          : double.infinity;
+      if (width < 24) width = (next - left).clamp(width, 24).toDouble();
+      if (width < 2) width = 2; // still visible when it has the focus
       final focused = isFocusedRow && j == _col;
       children.add(
         Positioned(
@@ -590,7 +614,7 @@ class _TvGuideState extends State<TvGuide> {
   }
 
   Widget _nowLine() {
-    final now = epgNow().toLocal();
+    final now = epgNow();
     if (now.isBefore(_windowStart) || now.isAfter(_windowEnd)) {
       return const SizedBox.shrink();
     }
